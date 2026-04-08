@@ -20,6 +20,7 @@ COPY market_locator.py /app/market_locator.py
 COPY trader.py /app/trader.py
 COPY signal_analyzer.py /app/signal_analyzer.py
 COPY http_session.py /app/http_session.py
+COPY btc_price_feed.py /app/btc_price_feed.py
 
 RUN mkdir -p /app/logs /app/exports && \
     chown -R appuser:appuser /app
