@@ -337,8 +337,9 @@ class Btc15RedeemEngine:
         self._window_budget_usdc = self._effective_budget(self._session_balance_usdc)
 
         LOGGER.info(
-            "BTC 15m redeem engine | profile=%s | mode=%s | dry_run=%s | market=%s | continuous=%s",
+            "BTC 15m redeem engine | profile=%s | version=%s | mode=%s | dry_run=%s | market=%s | continuous=%s",
             self._profile_label(),
+            self.config.bot_version,
             self.config.strategy_mode,
             self.config.dry_run,
             self.config.market_slug_prefix,
