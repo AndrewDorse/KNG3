@@ -2,7 +2,7 @@ services:
   bot:
     build:
       context: .
-      dockerfile: deploy/hostinger-docker/Dockerfile
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       POLY_PRIVATE_KEY: ${POLY_PRIVATE_KEY}

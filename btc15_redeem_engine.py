@@ -1,0 +1,2125 @@
+#!/usr/bin/env python3
+"""BTC 15-minute single-window redeem-hold strategy."""
+
+from __future__ import annotations
+
+import json
+import signal
+import math
+import re
+import time
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from config import (
+    LOGGER,
+    ActiveContract,
+    BotConfig,
+    TokenMarket,
+    append_window_balance_snapshot,
+    setup_file_logger,
+)
+from market_locator import GammaMarketLocator
+from trader import PolymarketTrader
+
+_REPO_ROOT = Path(__file__).resolve().parent
+MIMIC_PARAMS_JSON = _REPO_ROOT / "exports" / "wallet10_mimic_search.json"
+AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
+STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
+MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
+STRATEGY_PROFILE_ID = AA1_STRATEGY_PROFILE_ID
+
+
+def _load_mimic_search_params(path: Path) -> dict[str, float] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = data.get("best", {}).get("params")
+        if isinstance(raw, dict) and raw:
+            return raw  # type: ignore[return-value]
+    except (OSError, json.JSONDecodeError, TypeError, KeyError):
+        pass
+    return None
+
+
+PRIMARY_PRICE_MIN = 0.01
+PRIMARY_PRICE_MAX = 0.98
+PRIMARY_PRICE_SOFT_MAX = 0.98
+PRIMARY_PRICE_HARD_MAX = 0.99
+HEDGE_MAX_PRICE = 0.99
+LATE_HEDGE_MAX_PRICE = 0.99
+AA1_CHEAP_ENTRY_MAX = 0.42
+AA1_CHEAP_REPEAT_DROP = 0.03
+AA1_CHEAP_COOLDOWN_SECONDS = 15
+AA1_MAX_CHEAP_LOTS_PER_SIDE = 8
+AA1_MAX_OPEN_IMBALANCE_ORDERS = 2
+# Named profile "strategy_0" / simulate_current_strategy_price_history primary+hedge path.
+S0_PRIMARY_PRICE_MIN = 0.45
+S0_PRIMARY_PRICE_MAX = 0.75
+S0_PRIMARY_PRICE_SOFT_MAX = 0.82
+S0_PRIMARY_PRICE_HARD_MAX = 0.85
+S0_HEDGE_MAX_PRICE = 0.35
+S0_LATE_HEDGE_MAX_PRICE = 0.45
+S0_PRIMARY_TARGET_SHARE = 0.67
+S0_HEDGE_TARGET_SHARE = 0.33
+S0_TARGET_DIRECTIONAL_RATIO = 1.10
+S0_TARGET_GUARANTEE_RATIO = 1.00
+S0_LATE_REPAIR_SECONDS = 120
+S0_LATE_TREND_START_SECONDS = 420
+S0_LATE_TREND_TARGET_SHARE = 0.58
+S0_LATE_TREND_HEDGE_MAX_PRICE = 0.32
+S0_LATE_TREND_MIN_WIN_PNL = 2.0
+LATE_REPAIR_SECONDS = 120
+LATE_TREND_START_SECONDS = 300
+LATE_TREND_CLEAR_PRICE = 0.55
+LATE_TREND_CLEAR_EDGE = 0.12
+LATE_TREND_LOCK_REVERSAL_PRICE = 0.60
+LATE_TREND_LOCK_REVERSAL_EDGE = 0.14
+LATE_TREND_HEDGE_MAX_PRICE = 0.28
+LATE_TREND_TARGET_SHARE = 0.66
+LATE_TREND_MIN_WIN_PNL = 1.5
+PRICE_HISTORY_RETENTION_SECONDS = 120
+TP_PRICE = 0.97
+EARLY_EXIT_WIN_PRICE = 0.99
+EARLY_EXIT_LOSE_PRICE = 0.01
+HEDGE_SALVAGE_MIN_PRICE = 0.03
+HEDGE_SALVAGE_BUFFER = 0.02
+MIN_MARKETABLE_BUY_NOTIONAL = 1.00
+TOKEN_SHARE_RAW_UNIT = 1_000_000
+# "current" phase ramp (same as run_named_profiles strategy_0 / price-history replay).
+PHASE_SPEND_CAPS = (
+    (60, 0.05),
+    (180, 0.15),
+    (420, 0.30),
+    (720, 0.65),
+    (840, 1.00),
+    (900, 1.00),
+)
+
+# Twin-style box: two-sided, balance, stop when UP-win and DOWN-win PnL both positive; slow 5-share scaling.
+BOX_STRATEGY_PROFILE_ID = "BOX_balance_both_ways_v1"
+BOX_BOTH_WAYS_MIN_PNL_USDC = 0.25
+BOX_MAX_LOTS_PER_SIDE = 10
+BOX_MAX_OPEN_IMBALANCE_ORDERS = 2
+BOX_SIDE_COOLDOWN_SECONDS = 18
+BOX_BALANCE_COOLDOWN_SECONDS = 5
+BOX_PAIR_MIN = 0.97
+BOX_PAIR_MAX = 1.03
+BOX_PAIR_SPREAD_MAX = 0.18
+# Wider band for first leg (empty book) so we actually participate most windows.
+BOX_OPEN_PAIR_MIN = 0.88
+BOX_OPEN_PAIR_MAX = 1.12
+BOX_OPEN_SPREAD_MAX = 0.52
+# If the market stays choppy vs tight pair, still open before half the window is gone.
+BOX_OPEN_FALLBACK_ELAPSED_SECONDS = 40.0
+BOX_OPEN_FALLBACK_PAIR_MAX = 1.18
+BOX_OPEN_FALLBACK_SPREAD_MAX = 0.62
+BOX_OPEN_PATIENCE_ELAPSED_SECONDS = 90.0
+BOX_OPEN_PATIENCE_PAIR_MAX = 1.35
+BOX_OPEN_PATIENCE_SPREAD_MAX = 0.75
+BOX_SECOND_LEG_PAIR_MAX = 1.14
+BOX_SECOND_LEG_SPREAD_MAX = 0.50
+BOX_WINNER_SPREAD_MIN = 0.10
+BOX_WINNER_PRICE_MIN = 0.40
+BOX_WINNER_PRICE_MAX = 0.90
+BOX_LOSER_PRICE_MAX = 0.44
+BOX_LOSER_SPREAD_MIN = 0.08
+
+
+@dataclass(slots=True)
+class ManagedOrder:
+    order_id: str
+    side_label: str
+    kind: str
+    price: float
+    shares: int
+    placed_at: float
+    reason: str
+
+    @property
+    def notional(self) -> float:
+        return self.price * self.shares
+
+
+@dataclass(slots=True)
+class ManagedExitOrder:
+    order_id: str
+    side_label: str
+    purpose: str
+    price: float
+    shares: int
+
+
+@dataclass(slots=True)
+class PricePoint:
+    ts: float
+    up_price: float
+    down_price: float
+
+
+@dataclass(slots=True)
+class AA1CheapLot:
+    cheap_side: str
+    cheap_price: float
+    elapsed_sec: float
+
+
+@dataclass(slots=True)
+class OrderCandidate:
+    side_label: str
+    kind: str
+    reference_price: float
+    limit_ceiling: float
+    reason: str
+    shares: int
+
+
+@dataclass(slots=True)
+class BookSnapshot:
+    up_shares: int
+    down_shares: int
+    up_spend: float
+    down_spend: float
+    pending_notional: float
+    total_spend: float
+    committed_notional: float
+    up_avg_price: float
+    down_avg_price: float
+    pair_avg_sum: float
+    guarantee_ratio: float
+    directional_ratio: float
+    primary_side: str
+    primary_price: float
+    primary_score: float
+    hedge_side: str
+    hedge_price: float
+    hedge_score: float
+    score_edge: float
+    primary_spend_share: float
+    hedge_spend_share: float
+    primary_coverage: float
+    hedge_coverage: float
+    up_pnl_if_win: float
+    down_pnl_if_win: float
+    best_case_pnl: float
+    worst_case_loss: float
+
+
+class Btc15RedeemEngine:
+    """One-window BTC 15m strategy: buy, hold, and stop before expiry."""
+
+    def __init__(
+        self,
+        config: BotConfig,
+        locator: GammaMarketLocator,
+        trader: PolymarketTrader,
+    ):
+        self.config = config
+        self.locator = locator
+        self.trader = trader
+
+        self._shutdown = False
+        self._current_window_slug: str | None = None
+        self._window_start_ts: float = 0.0
+        self._window_budget_usdc: float = 0.0
+        self._session_balance_usdc: float = 0.0
+        self._window_started = False
+        self._window_finished = False
+        self._pre_window_logged = False
+        self._no_signal_reason = ""
+        self._last_heartbeat = 0.0
+        self._last_order_time = 0.0
+        self._current_elapsed = 0.0
+        self._strategy_primary_side: str | None = None
+        self._late_trend_locked_side: str | None = None
+        self._primary_reversals = 0
+        self._last_primary_switch_time = 0.0
+        self._tp_phase_started = False
+        self._exit_mode = False
+        self._exit_mode_winner_side: str | None = None
+        self._exit_orders_by_side: dict[str, ManagedExitOrder] = {}
+        self._fully_exited_sides: set[str] = set()
+
+        self._last_contract: ActiveContract | None = None
+        self._last_up_price: float | None = None
+        self._last_down_price: float | None = None
+        self._last_price_time: float = 0.0
+        self._price_history: list[PricePoint] = []
+
+        self._order_map: dict[str, ManagedOrder] = {}
+        self._orders_placed = 0
+        self._fills = 0
+        self._cancels = 0
+        self._primary_orders = 0
+        self._hedge_orders = 0
+
+        self._up_shares = 0
+        self._down_shares = 0
+        self._up_spend = 0.0
+        self._down_spend = 0.0
+
+        self._baseline_up_balance = 0.0
+        self._baseline_down_balance = 0.0
+        self._window_finalized = False
+        self._balance_retry_attempts_remaining = 0
+        self._next_balance_retry_ts = 0.0
+        self._aa1_unmatched_lots: dict[str, list[AA1CheapLot]] = {"UP": [], "DOWN": []}
+        self._aa1_cheap_lot_counts: dict[str, int] = {"UP": 0, "DOWN": 0}
+        self._aa1_last_cheap_buy_elapsed: dict[str, float | None] = {"UP": None, "DOWN": None}
+        self._aa1_last_cheap_buy_price: dict[str, float | None] = {"UP": None, "DOWN": None}
+
+        self._mimic_params: dict[str, float] = {}
+        self._mimic_action_queue: deque[OrderCandidate] = deque()
+        self._mimic_last_pair_elapsed = -10_000.0
+        self._mimic_last_winner_elapsed = -10_000.0
+        self._mimic_last_loser_elapsed = -10_000.0
+        self._mimic_last_reversal_elapsed = -10_000.0
+        self._mimic_last_lottery_elapsed = -10_000.0
+        self._mimic_prev_winner: str | None = None
+        self._mimic_consecutive_same_winner = 0
+        if self.config.strategy_mode == "mimic_lot":
+            loaded = _load_mimic_search_params(MIMIC_PARAMS_JSON)
+            if loaded:
+                self._mimic_params = loaded
+            else:
+                LOGGER.error(
+                    "strategy_mode=mimic_lot but could not load params from %s — falling back to aa1",
+                    MIMIC_PARAMS_JSON,
+                )
+
+        self._box_lot_counts: dict[str, int] = {"UP": 0, "DOWN": 0}
+        self._box_last_side_elapsed: dict[str, float | None] = {"UP": None, "DOWN": None}
+
+    def _strategy_mode_mimic(self) -> bool:
+        return self.config.strategy_mode == "mimic_lot" and bool(self._mimic_params)
+
+    def _strategy_mode_box_balance(self) -> bool:
+        return self.config.strategy_mode == "box_balance"
+
+    def _strategy_mode_strategy_0(self) -> bool:
+        return self.config.strategy_mode == "strategy_0"
+
+    def _strategy_mode_signal_only(self) -> bool:
+        return self.config.strategy_mode == "signal_only"
+
+    def _strategy_mode_hold_to_redeem(self) -> bool:
+        return self._strategy_mode_mimic() or self._strategy_mode_box_balance()
+
+    def _profile_label(self) -> str:
+        if self._strategy_mode_box_balance():
+            return BOX_STRATEGY_PROFILE_ID
+        if self._strategy_mode_mimic():
+            return MIMIC_STRATEGY_PROFILE_ID
+        if self._strategy_mode_signal_only():
+            return "SIGNAL_ANALYZER_v1"
+        if self._strategy_mode_strategy_0():
+            return STRATEGY_0_PROFILE_ID
+        return AA1_STRATEGY_PROFILE_ID
+
+    def shutdown(self, *_: Any) -> None:
+        LOGGER.info("Shutdown requested. Cancelling live orders and stopping.")
+        self._shutdown = True
+
+    def run(self) -> None:
+        signal.signal(signal.SIGINT, self.shutdown)
+        signal.signal(signal.SIGTERM, self.shutdown)
+
+        self._session_balance_usdc = self.trader.wallet_balance_usdc()
+        self._window_budget_usdc = self._effective_budget(self._session_balance_usdc)
+
+        LOGGER.info(
+            "BTC 15m redeem engine | profile=%s | mode=%s | dry_run=%s | market=%s | continuous=%s",
+            self._profile_label(),
+            self.config.strategy_mode,
+            self.config.dry_run,
+            self.config.market_slug_prefix,
+            not self.config.trade_one_window,
+        )
+        LOGGER.info(
+            "Balance plan | wallet=$%.2f | budget_cap=$%.2f | reserve=$%.2f | effective_budget=$%.2f",
+            self._session_balance_usdc,
+            self.config.strategy_budget_cap_usdc,
+            self.config.strategy_wallet_reserve_usdc,
+            self._window_budget_usdc,
+        )
+        LOGGER.info(
+            "Execution plan | shares/order=%d | entry_delay=%ds | new_order_cutoff=%ds | stale_order=%ss | live_order_cap=%d",
+            self.config.shares_per_level,
+            self.config.strategy_entry_delay_seconds,
+            self.config.strategy_new_order_cutoff_seconds,
+            self.config.strategy_stale_order_seconds,
+            self.config.strategy_max_live_orders,
+        )
+
+        if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
+            LOGGER.warning(
+                "Usable budget below target minimum at startup: have $%.2f after reserve, target is $%.2f. "
+                "Bot will keep running and retry on future windows.",
+                self._window_budget_usdc,
+                self.config.strategy_min_budget_usdc,
+            )
+
+        while not self._shutdown:
+            tick_started = time.time()
+            try:
+                self._loop_once()
+            except Exception:
+                LOGGER.exception("Loop error")
+            elapsed = time.time() - tick_started
+            time.sleep(max(0.0, self.config.poll_interval_seconds - elapsed))
+
+        self._graceful_shutdown()
+
+    def _graceful_shutdown(self) -> None:
+        if self._last_contract is not None and not self._window_finalized:
+            self._finalize_window(self._last_contract, reason="shutdown")
+
+    def _loop_once(self) -> None:
+        contract = self.locator.get_active_contract()
+        if contract is None:
+            return
+
+        self._last_contract = contract
+        now = time.time()
+        window_end_ts = float(contract.end_time.timestamp())
+        window_start_ts = window_end_ts - self.config.window_size_seconds
+        seconds_to_start = window_start_ts - now
+        seconds_remaining = max(0.0, window_end_ts - now)
+        elapsed = max(0.0, now - window_start_ts)
+        self._current_elapsed = elapsed
+
+        if contract.slug != self._current_window_slug:
+            self._handle_new_window(contract, window_start_ts)
+
+        if seconds_to_start > 0:
+            if not self._pre_window_logged or seconds_to_start <= 10:
+                LOGGER.info(
+                    "[PRE-WINDOW] %s | starts_in=%ds | ends=%s",
+                    contract.slug,
+                    int(seconds_to_start),
+                    contract.end_time.strftime("%H:%M:%S"),
+                )
+                self._pre_window_logged = True
+            return
+
+        if not self._window_started:
+            self._window_started = True
+            self._pre_window_logged = False
+            if elapsed > 5:
+                LOGGER.info(
+                    "[WINDOW JOIN] %s | elapsed=%ds | budget=$%.2f | entry_delay=%ds",
+                    contract.slug,
+                    int(elapsed),
+                    self._window_budget_usdc,
+                    self.config.strategy_entry_delay_seconds,
+                )
+            else:
+                LOGGER.info(
+                    "[WINDOW START] %s | budget=$%.2f | entry_delay=%ds",
+                    contract.slug,
+                    self._window_budget_usdc,
+                    self.config.strategy_entry_delay_seconds,
+                )
+
+        open_orders = self._get_contract_orders(contract)
+        live_ids = self._extract_live_ids(open_orders)
+        self._poll_prices(contract)
+        self._detect_fills(contract, live_ids)
+        self._cancel_stale_orders(contract, seconds_remaining)
+        self._maybe_retry_window_balance(contract, elapsed, seconds_remaining)
+
+        open_orders = self._get_contract_orders(contract)
+        self._maybe_enter_early_exit_mode(contract)
+        if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only():
+            self._manage_exit_orders(contract, open_orders)
+
+        if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only() and seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            self._run_take_profit_phase(contract)
+
+        snapshot = self._build_snapshot()
+        self._maybe_record_price_snapshot(contract, snapshot, elapsed, seconds_remaining)
+        self._maintain_passive_maker_orders(contract, snapshot, elapsed, seconds_remaining)
+
+        if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
+            self._no_signal_reason = (
+                f"waiting for balance settlement: budget ${self._window_budget_usdc:.2f} "
+                f"< min ${self.config.strategy_min_budget_usdc:.2f}"
+            )
+        elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem():
+            self._no_signal_reason = "exit mode active"
+        elif elapsed >= self.config.strategy_entry_delay_seconds:
+            if self._strategy_mode_mimic():
+                self._mimic_evaluate_tick(elapsed)
+                while self._mimic_action_queue:
+                    candidate = self._mimic_action_queue[0]
+                    open_orders = self._get_contract_orders(contract)
+                    if not self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        break
+                    self._mimic_action_queue.popleft()
+                    if not self._place_candidate(contract, candidate, snapshot, elapsed):
+                        self._mimic_action_queue.appendleft(candidate)
+                        break
+                    snapshot = self._build_snapshot()
+                if not self._mimic_action_queue and self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            elif self._strategy_mode_box_balance():
+                candidate = self._choose_box_balance_candidate(snapshot, elapsed, seconds_remaining)
+                if candidate is not None:
+                    open_orders = self._get_contract_orders(contract)
+                    if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        if self._place_candidate(contract, candidate, snapshot, elapsed):
+                            self._box_lot_counts[candidate.side_label] += 1
+                            self._box_last_side_elapsed[candidate.side_label] = elapsed
+                elif self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            elif self._strategy_mode_signal_only():
+                pass  # signal_analyzer thread handles orders
+            elif self._strategy_mode_strategy_0():
+                candidate = self._choose_strategy_0_candidate(snapshot, elapsed, seconds_remaining)
+                if candidate is not None:
+                    open_orders = self._get_contract_orders(contract)
+                    if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        self._place_candidate(contract, candidate, snapshot, elapsed)
+                elif self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            else:
+                candidate = self._choose_aa1_candidate(snapshot, elapsed, seconds_remaining)
+                if candidate is not None:
+                    open_orders = self._get_contract_orders(contract)
+                    if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        self._place_candidate(contract, candidate, snapshot, elapsed)
+                elif self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+
+        if now - self._last_heartbeat >= self.config.strategy_heartbeat_interval_seconds:
+            heartbeat_orders = self._get_contract_orders(contract)
+            self._log_heartbeat(contract, snapshot, heartbeat_orders, elapsed, seconds_remaining)
+            self._last_heartbeat = now
+
+    def _handle_new_window(self, contract: ActiveContract, window_start_ts: float) -> None:
+        if self._current_window_slug and not self._window_finalized and self._last_contract is not None:
+            self._finalize_window(self._last_contract, reason="rollover")
+
+        self._session_balance_usdc = self.trader.wallet_balance_usdc()
+        self._window_budget_usdc = self._effective_budget(self._session_balance_usdc)
+        self._current_window_slug = contract.slug
+        self._window_start_ts = window_start_ts
+        self._window_started = False
+        self._window_finished = False
+        self._window_finalized = False
+        self._pre_window_logged = False
+        self._last_heartbeat = 0.0
+        self._last_order_time = 0.0
+        self._current_elapsed = 0.0
+        self._strategy_primary_side = None
+        self._late_trend_locked_side = None
+        self._primary_reversals = 0
+        self._last_primary_switch_time = 0.0
+        self._tp_phase_started = False
+        self._exit_mode = False
+        self._exit_mode_winner_side = None
+        self._exit_orders_by_side.clear()
+        self._fully_exited_sides.clear()
+        self._no_signal_reason = ""
+        self._balance_retry_attempts_remaining = 0
+        self._next_balance_retry_ts = 0.0
+
+        self._order_map.clear()
+        self._orders_placed = 0
+        self._fills = 0
+        self._cancels = 0
+        self._primary_orders = 0
+        self._hedge_orders = 0
+
+        self._up_shares = 0
+        self._down_shares = 0
+        self._up_spend = 0.0
+        self._down_spend = 0.0
+
+        self._last_up_price = None
+        self._last_down_price = None
+        self._last_price_time = 0.0
+        self._price_history.clear()
+
+        self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
+        self._baseline_down_balance = self.trader.token_balance(contract.down.token_id)
+        self._aa1_unmatched_lots = {"UP": [], "DOWN": []}
+        self._aa1_cheap_lot_counts = {"UP": 0, "DOWN": 0}
+        self._aa1_last_cheap_buy_elapsed = {"UP": None, "DOWN": None}
+        self._aa1_last_cheap_buy_price = {"UP": None, "DOWN": None}
+
+        self._mimic_action_queue.clear()
+        self._mimic_last_pair_elapsed = -10_000.0
+        self._mimic_last_winner_elapsed = -10_000.0
+        self._mimic_last_loser_elapsed = -10_000.0
+        self._mimic_last_reversal_elapsed = -10_000.0
+        self._mimic_last_lottery_elapsed = -10_000.0
+        self._mimic_prev_winner = None
+        self._mimic_consecutive_same_winner = 0
+
+        self._box_lot_counts = {"UP": 0, "DOWN": 0}
+        self._box_last_side_elapsed = {"UP": None, "DOWN": None}
+
+        setup_file_logger(contract.slug)
+        log_file = next(
+            (
+                str(Path(getattr(handler, "baseFilename", "")).absolute())
+                for handler in LOGGER.handlers
+                if hasattr(handler, "baseFilename")
+            ),
+            "",
+        )
+        LOGGER.info(
+            "[NEW WINDOW] %s | question=%s | ends=%s | wallet=$%.2f | budget=$%.2f | baseline_up=%.4f | baseline_down=%.4f",
+            contract.slug,
+            contract.question,
+            contract.end_time.strftime("%H:%M:%S"),
+            self._session_balance_usdc,
+            self._window_budget_usdc,
+            self._baseline_up_balance,
+            self._baseline_down_balance,
+        )
+        append_window_balance_snapshot(
+            fetched_at=datetime.now(),
+            log_file=log_file,
+            slug=contract.slug,
+            question=contract.question,
+            ends_at=contract.end_time.strftime("%H:%M:%S"),
+            wallet_usdc=self._session_balance_usdc,
+            budget_usdc=self._window_budget_usdc,
+            baseline_up=self._baseline_up_balance,
+            baseline_down=self._baseline_down_balance,
+            dry_run=self.config.dry_run,
+        )
+        LOGGER.info(
+            "[BALANCE SNAPSHOT] %s | wallet=$%.2f | budget=$%.2f | baseline_up=%.4f | baseline_down=%.4f",
+            contract.slug,
+            self._session_balance_usdc,
+            self._window_budget_usdc,
+            self._baseline_up_balance,
+            self._baseline_down_balance,
+        )
+        LOGGER.info(
+            "[WINDOW MODE] %s | dry_run=%s | shares_per_order=%d | trade_one_window=%s",
+            contract.slug,
+            self.config.dry_run,
+            self.config.shares_per_level,
+            self.config.trade_one_window,
+        )
+        if self._strategy_mode_mimic():
+            mp = self._mimic_params
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | mimic_json=%s | entry_delay=%s | cutoff_elapsed=%s | "
+                "pair=[%.2f,%.2f] winner_spread_min=%.2f lottery_start=%s | hold_to_redeem (no late TP)",
+                contract.slug,
+                self._profile_label(),
+                MIMIC_PARAMS_JSON.name,
+                mp.get("entry_delay"),
+                mp.get("cutoff"),
+                float(mp.get("pair_min", 0)),
+                float(mp.get("pair_max", 0)),
+                float(mp.get("winner_spread_min", 0)),
+                mp.get("lottery_start"),
+            )
+        elif self._strategy_mode_box_balance():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | shares/order=%d | "
+                "stop_new_buys_only_if_both_outcomes_pnl>$%.2f | max_lots/side=%d imbalance_orders<=%d | "
+                "pair[%.2f,%.2f] spread<=%.2f | hold_to_redeem (no late TP)",
+                contract.slug,
+                self._profile_label(),
+                self.config.shares_per_level,
+                BOX_BOTH_WAYS_MIN_PNL_USDC,
+                BOX_MAX_LOTS_PER_SIDE,
+                BOX_MAX_OPEN_IMBALANCE_ORDERS,
+                BOX_PAIR_MIN,
+                BOX_PAIR_MAX,
+                BOX_PAIR_SPREAD_MAX,
+            )
+        elif self._strategy_mode_signal_only():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | signal_only mode — orders via signal_analyzer thread",
+                contract.slug, self._profile_label(),
+            )
+        elif self._strategy_mode_strategy_0():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | entry_delay=%ds | new_cutoff=%ds | flip=%.2f | "
+                "primary[%.2f-%.2f] soft<=%.2f hedge<=%.2f late_hedge<=%.2f | "
+                "targets prim_share>%.2f hedge_share>%.2f dir>=%.2f guar>=%.2f | late_trend>=%ds repair<=%ds | tp=$%.2f",
+                contract.slug,
+                self._profile_label(),
+                self.config.strategy_entry_delay_seconds,
+                self.config.strategy_new_order_cutoff_seconds,
+                self.config.strategy_primary_flip_threshold,
+                S0_PRIMARY_PRICE_MIN,
+                S0_PRIMARY_PRICE_MAX,
+                S0_PRIMARY_PRICE_SOFT_MAX,
+                S0_HEDGE_MAX_PRICE,
+                S0_LATE_HEDGE_MAX_PRICE,
+                S0_PRIMARY_TARGET_SHARE,
+                S0_HEDGE_TARGET_SHARE,
+                S0_TARGET_DIRECTIONAL_RATIO,
+                S0_TARGET_GUARANTEE_RATIO,
+                int(S0_LATE_TREND_START_SECONDS),
+                S0_LATE_REPAIR_SECONDS,
+                TP_PRICE,
+            )
+        else:
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | entry_delay=%ds | new_cutoff=%ds | "
+                "cheap_max=%.2f | repeat_drop=%.2f | cheap_cooldown=%ds | max_cheap_lots=%d | max_imbalance_orders=%d | tp=$%.2f",
+                contract.slug,
+                self._profile_label(),
+                self.config.strategy_entry_delay_seconds,
+                self.config.strategy_new_order_cutoff_seconds,
+                AA1_CHEAP_ENTRY_MAX,
+                AA1_CHEAP_REPEAT_DROP,
+                AA1_CHEAP_COOLDOWN_SECONDS,
+                AA1_MAX_CHEAP_LOTS_PER_SIDE,
+                AA1_MAX_OPEN_IMBALANCE_ORDERS,
+                TP_PRICE,
+            )
+        if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
+            self._balance_retry_attempts_remaining = self.config.strategy_balance_retry_attempts
+            self._next_balance_retry_ts = time.time() + self.config.strategy_balance_retry_seconds
+            LOGGER.warning(
+                "[BALANCE WAIT] %s | budget=$%.2f below min=$%.2f | will retry %d times every %ds",
+                contract.slug,
+                self._window_budget_usdc,
+                self.config.strategy_min_budget_usdc,
+                self._balance_retry_attempts_remaining,
+                self.config.strategy_balance_retry_seconds,
+            )
+
+    def _finalize_window(self, contract: ActiveContract, reason: str) -> None:
+        if self._window_finalized:
+            return
+
+        for order_id in list(self._order_map):
+            self._cancel_order_safe(order_id, reason=reason)
+        open_orders = self._get_contract_orders(contract)
+        if open_orders:
+            cancelled = self.trader.cancel_all_orders(open_orders) if not self.config.dry_run else len(open_orders)
+            self._cancels += cancelled
+            LOGGER.info(
+                "[WINDOW STOP] %s | reason=%s | cancelled=%d live orders",
+                contract.slug,
+                reason,
+                cancelled,
+            )
+
+        time.sleep(1.0)
+
+        up_delta = self._token_delta(contract.up, self._baseline_up_balance)
+        down_delta = self._token_delta(contract.down, self._baseline_down_balance)
+        total_spend = self._up_spend + self._down_spend
+        up_avg_price = (self._up_spend / self._up_shares) if self._up_shares else 0.0
+        down_avg_price = (self._down_spend / self._down_shares) if self._down_shares else 0.0
+        guarantee_ratio = (min(self._up_shares, self._down_shares) / total_spend) if total_spend else 0.0
+        directional_ratio = (max(self._up_shares, self._down_shares) / total_spend) if total_spend else 0.0
+        up_pnl_if_win = self._up_shares - total_spend
+        down_pnl_if_win = self._down_shares - total_spend
+
+        LOGGER.info(
+            "[WINDOW SUMMARY] %s | reason=%s | spend=$%.2f | shares_up=%d shares_down=%d | avg_up=%.3f avg_down=%.3f pair=%.3f | guarantee=%.3f directional=%.3f",
+            contract.slug,
+            reason,
+            total_spend,
+            self._up_shares,
+            self._down_shares,
+            up_avg_price,
+            down_avg_price,
+            up_avg_price + down_avg_price,
+            guarantee_ratio,
+            directional_ratio,
+        )
+        LOGGER.info(
+            "[WINDOW PAYOUT] %s | if_UP_wins=$%.2f | if_DOWN_wins=$%.2f",
+            contract.slug,
+            up_pnl_if_win,
+            down_pnl_if_win,
+        )
+        LOGGER.info(
+            "[WINDOW DELTA] %s | wallet_up_delta=%.4f | wallet_down_delta=%.4f",
+            contract.slug,
+            up_delta,
+            down_delta,
+        )
+        LOGGER.info(
+            "[WINDOW OPS] %s | orders=%d | fills=%d | cancels=%d | primary_orders=%d | hedge_orders=%d",
+            contract.slug,
+            self._orders_placed,
+            self._fills,
+            self._cancels,
+            self._primary_orders,
+            self._hedge_orders,
+        )
+        LOGGER.info("Window finalized. Remaining positions, if any, stay open after late TP handling.")
+
+        self._window_finished = True
+        self._window_finalized = True
+
+    def _poll_prices(self, contract: ActiveContract) -> None:
+        up_price = self._resolve_trade_price(contract.up)
+        down_price = self._resolve_trade_price(contract.down)
+        if up_price is None or down_price is None:
+            LOGGER.debug("[PRICE WAIT] %s | up=%s | down=%s", contract.slug, up_price, down_price)
+            return
+
+        self._last_up_price = up_price
+        self._last_down_price = down_price
+        self._last_price_time = time.time()
+
+        self._price_history.append(
+            PricePoint(ts=self._last_price_time, up_price=up_price, down_price=down_price)
+        )
+        cutoff = self._last_price_time - PRICE_HISTORY_RETENTION_SECONDS
+        self._price_history = [p for p in self._price_history if p.ts >= cutoff]
+
+    def _maybe_retry_window_balance(
+        self,
+        contract: ActiveContract,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> None:
+        if self.config.dry_run:
+            return
+        if self._window_budget_usdc >= self.config.strategy_min_budget_usdc:
+            return
+        if self._balance_retry_attempts_remaining <= 0:
+            return
+        if time.time() < self._next_balance_retry_ts:
+            return
+        if seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            return
+
+        attempt = self.config.strategy_balance_retry_attempts - self._balance_retry_attempts_remaining + 1
+        self._balance_retry_attempts_remaining -= 1
+        self._next_balance_retry_ts = time.time() + self.config.strategy_balance_retry_seconds
+
+        refreshed_wallet = self.trader.wallet_balance_usdc()
+        refreshed_budget = self._effective_budget(refreshed_wallet)
+        self._session_balance_usdc = refreshed_wallet
+        self._window_budget_usdc = refreshed_budget
+
+        LOGGER.info(
+            "[BALANCE RETRY] %s | attempt=%d/%d | elapsed=%ds | wallet=$%.2f | budget=$%.2f",
+            contract.slug,
+            attempt,
+            self.config.strategy_balance_retry_attempts,
+            int(elapsed),
+            refreshed_wallet,
+            refreshed_budget,
+        )
+
+        if refreshed_budget >= self.config.strategy_min_budget_usdc:
+            LOGGER.info(
+                "[BALANCE READY] %s | refreshed budget reached $%.2f and trading is enabled for this window",
+                contract.slug,
+                refreshed_budget,
+            )
+            return
+
+        if self._balance_retry_attempts_remaining <= 0:
+            LOGGER.warning(
+                "[BALANCE GIVEUP] %s | budget still $%.2f after retries; skipping new entries this window",
+                contract.slug,
+                refreshed_budget,
+            )
+
+    def _resolve_trade_price(self, token: TokenMarket) -> float | None:
+        market_price = self.trader.get_market_price(token.token_id)
+        if market_price is not None and market_price > 0:
+            return round(market_price, 4)
+        midpoint = self.trader.get_midpoint(token.token_id)
+        if midpoint is not None and midpoint > 0:
+            return round(midpoint, 4)
+        return None
+
+    def _detect_fills(self, contract: ActiveContract, live_ids: set[str]) -> None:
+        now = time.time()
+        filled_ids: list[str] = []
+        for order_id, order in self._order_map.items():
+            if now - order.placed_at < self.config.strategy_fill_grace_seconds:
+                continue
+            if order_id in live_ids:
+                continue
+            self._mark_fill(contract, order)
+            filled_ids.append(order_id)
+
+        for order_id in filled_ids:
+            self._order_map.pop(order_id, None)
+
+    def _mark_fill(self, contract: ActiveContract, order: ManagedOrder) -> None:
+        self._fills += 1
+        notional = order.notional
+        if order.side_label == "UP":
+            self._up_shares += order.shares
+            self._up_spend += notional
+        else:
+            self._down_shares += order.shares
+            self._down_spend += notional
+        if order.reason == "aa1_buy_cheap":
+            self._aa1_record_cheap_fill(order.side_label, order.price, self._current_elapsed)
+        elif order.reason.startswith("aa1_balance|"):
+            self._aa1_mark_balance_fill(order.reason)
+
+        LOGGER.info(
+            "[FILL] %s | kind=%s | side=%s | price=$%.2f | shares=%d | spend=$%.2f | reason=%s",
+            contract.slug,
+            order.kind,
+            order.side_label,
+            order.price,
+            order.shares,
+            notional,
+            order.reason,
+        )
+
+    def _cancel_stale_orders(self, contract: ActiveContract, seconds_remaining: float) -> None:
+        if not self._order_map:
+            return
+
+        now = time.time()
+        stale_seconds = self.config.strategy_stale_order_seconds
+        stale_ids: list[tuple[str, str]] = []
+        for order_id, order in self._order_map.items():
+            age = now - order.placed_at
+            if age < stale_seconds:
+                continue
+
+            current_price = self._last_up_price if order.side_label == "UP" else self._last_down_price
+            too_far = current_price is not None and current_price > order.price + 0.05
+            if too_far or seconds_remaining <= LATE_REPAIR_SECONDS:
+                stale_ids.append((order_id, "stale"))
+
+        for order_id, reason in stale_ids:
+            self._cancel_order_safe(order_id, reason=reason)
+            LOGGER.info("[CANCEL] %s | order=%s | reason=%s", contract.slug, order_id[:16], reason)
+
+    def _run_take_profit_phase(self, contract: ActiveContract) -> None:
+        self._enter_exit_mode(contract, reason=f"late tp phase at ${TP_PRICE:.2f}")
+        if self._exit_mode_winner_side is None:
+            self._ensure_exit_sell(contract, "UP", TP_PRICE, purpose="tp")
+            self._ensure_exit_sell(contract, "DOWN", TP_PRICE, purpose="tp")
+
+    def _maybe_enter_early_exit_mode(self, contract: ActiveContract) -> None:
+        # L1 simulation holds inventory through the window and does not use
+        # early winner-take-all exits.
+        return
+
+    def _maintain_passive_maker_orders(
+        self,
+        contract: ActiveContract,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> None:
+        return
+
+    def _dominant_extreme_side(self) -> str | None:
+        if self._last_up_price is None or self._last_down_price is None:
+            return None
+        if self._last_up_price >= EARLY_EXIT_WIN_PRICE and self._last_down_price <= EARLY_EXIT_LOSE_PRICE:
+            return "UP"
+        if self._last_down_price >= EARLY_EXIT_WIN_PRICE and self._last_up_price <= EARLY_EXIT_LOSE_PRICE:
+            return "DOWN"
+        return None
+
+    def _enter_exit_mode(self, contract: ActiveContract, reason: str, winner_side: str | None = None) -> None:
+        if not self._tp_phase_started:
+            self._tp_phase_started = True
+            self._exit_mode = True
+            for order_id in list(self._order_map):
+                self._cancel_order_safe(order_id, reason="exit-mode")
+            LOGGER.info("[TP PHASE] %s | entering exit mode: %s", contract.slug, reason)
+        if winner_side is not None and self._exit_mode_winner_side != winner_side:
+            self._exit_mode_winner_side = winner_side
+            LOGGER.info("[EARLY EXIT] %s | winner_side=%s", contract.slug, winner_side)
+
+    def _manage_exit_orders(self, contract: ActiveContract, open_orders: list[dict[str, Any]]) -> None:
+        if not self._tp_phase_started:
+            return
+
+        open_ids = self._extract_live_ids(open_orders)
+        self._refresh_exit_orders(contract, open_ids)
+
+        if self._exit_mode_winner_side is not None:
+            self._ensure_exit_sell(contract, self._exit_mode_winner_side, TP_PRICE, purpose="tp")
+            loser_side = "DOWN" if self._exit_mode_winner_side == "UP" else "UP"
+            if self._exit_mode_winner_side in self._fully_exited_sides:
+                salvage_price = self._salvage_price_for(loser_side)
+                self._ensure_exit_sell(contract, loser_side, salvage_price, purpose="salvage")
+
+    def _refresh_exit_orders(self, contract: ActiveContract, open_ids: set[str]) -> None:
+        for side_label, managed in list(self._exit_orders_by_side.items()):
+            if managed.order_id in open_ids:
+                continue
+            token = contract.up if side_label == "UP" else contract.down
+            balance = self.trader.token_balance(token.token_id)
+            if balance < 5:
+                self._fully_exited_sides.add(side_label)
+                LOGGER.info(
+                    "[EXIT FILLED] %s | side=%s | purpose=%s | price=$%.2f | remaining=%.4f",
+                    contract.slug,
+                    side_label,
+                    managed.purpose,
+                    managed.price,
+                    balance,
+                )
+            else:
+                LOGGER.info(
+                    "[EXIT CLEAR] %s | side=%s | purpose=%s | order gone but balance=%.4f remains",
+                    contract.slug,
+                    side_label,
+                    managed.purpose,
+                    balance,
+                )
+            self._exit_orders_by_side.pop(side_label, None)
+
+    def _salvage_price_for(self, side_label: str) -> float:
+        current = self._last_up_price if side_label == "UP" else self._last_down_price
+        current = current or 0.0
+        target = max(HEDGE_SALVAGE_MIN_PRICE, min(0.25, current + HEDGE_SALVAGE_BUFFER))
+        return round(target, 2)
+
+    def _ensure_exit_sell(self, contract: ActiveContract, side_label: str, price: float, purpose: str) -> None:
+        if side_label in self._fully_exited_sides:
+            return
+        active = self._exit_orders_by_side.get(side_label)
+        if active is not None and active.purpose == purpose:
+            return
+
+        token = contract.up if side_label == "UP" else contract.down
+        balance = self.trader.token_balance(token.token_id)
+        size = int(balance)
+        if size < 5:
+            LOGGER.info(
+                "[EXIT SKIP] %s | side=%s | purpose=%s | balance=%.4f < 5 shares",
+                contract.slug,
+                side_label,
+                purpose,
+                balance,
+            )
+            if balance < 5:
+                self._fully_exited_sides.add(side_label)
+            return
+
+        order_id = self._place_take_profit_sell(contract, token, side_label, size, price, purpose)
+        if order_id is not None:
+            self._exit_orders_by_side[side_label] = ManagedExitOrder(
+                order_id=order_id,
+                side_label=side_label,
+                purpose=purpose,
+                price=price,
+                shares=size,
+            )
+
+    def _place_take_profit_sell(
+        self,
+        contract: ActiveContract,
+        token: TokenMarket,
+        side_label: str,
+        size: int,
+        price: float,
+        purpose: str,
+    ) -> str | None:
+        attempt_size = size
+        attempts = 0
+        while attempt_size >= 5 and attempts < 8:
+            attempts += 1
+            try:
+                resp = self.trader.place_limit_sell(token, price, attempt_size)
+                order_id = str(resp.get("orderID") or resp.get("id") or "")
+                LOGGER.info(
+                    "[EXIT PLACE] %s | side=%s | purpose=%s | price=$%.2f | shares=%d | order=%s",
+                    contract.slug,
+                    side_label,
+                    purpose,
+                    price,
+                    attempt_size,
+                    order_id[:16] if order_id else "n/a",
+                )
+                return order_id
+            except Exception as exc:
+                error_text = str(exc)
+                share_state = self._tp_share_state_from_error(error_text, attempt_size)
+                next_size = self._next_tp_attempt_size(error_text, attempt_size)
+                LOGGER.warning(
+                    "[EXIT FAILED] %s | side=%s | purpose=%s | price=$%.2f | shares=%d | next=%s | %s%s",
+                    contract.slug,
+                    side_label,
+                    purpose,
+                    price,
+                    attempt_size,
+                    next_size,
+                    exc,
+                    (
+                        " | decoded balance=%.4f matched=%.4f available=%.4f order=%.4f"
+                        % (
+                            share_state["balance_shares"],
+                            share_state["matched_shares"],
+                            share_state["available_shares"],
+                            share_state["order_shares"],
+                        )
+                    )
+                    if share_state is not None
+                    else "",
+                )
+                if share_state is not None and share_state["available_whole_shares"] < 5:
+                    LOGGER.info(
+                        "[EXIT HOLD] %s | side=%s | purpose=%s | only %.4f shares available outside matched orders; skipping re-place",
+                        contract.slug,
+                        side_label,
+                        purpose,
+                        share_state["available_shares"],
+                    )
+                    return None
+                if next_size is None or next_size >= attempt_size:
+                    next_size = attempt_size - 1
+                attempt_size = next_size
+
+        LOGGER.warning(
+            "[EXIT GIVEUP] %s | side=%s | purpose=%s | unable to place exit sell after retries",
+            contract.slug,
+            side_label,
+            purpose,
+        )
+        return None
+
+    def _next_tp_attempt_size(self, error_text: str, current_size: int) -> int | None:
+        available_size = self._available_tp_size_from_error(error_text, current_size)
+        if available_size is not None and available_size >= 5:
+            return available_size
+
+        numbers = [int(match) for match in re.findall(r"(?<![\d.])(\d+)(?![\d.])", error_text)]
+        lower_candidates = [value for value in numbers if 5 <= value < current_size]
+        if lower_candidates:
+            return max(lower_candidates)
+        if "size" in error_text.lower() or "amount" in error_text.lower() or "balance" in error_text.lower():
+            return current_size - 1
+        return None
+
+    def _tp_share_state_from_error(self, error_text: str, current_size: int) -> dict[str, float | int] | None:
+        balance_match = re.search(r"balance:\s*(\d+)", error_text)
+        amount_match = re.search(r"order amount:\s*(\d+)", error_text)
+        if balance_match is None or amount_match is None or current_size <= 0:
+            return None
+
+        matched_match = re.search(r"sum of matched orders:\s*(\d+)", error_text)
+        balance_raw = int(balance_match.group(1))
+        matched_raw = int(matched_match.group(1)) if matched_match is not None else 0
+        amount_raw = int(amount_match.group(1))
+        if amount_raw <= 0:
+            return None
+
+        unit_per_share = amount_raw / current_size
+        if unit_per_share <= 0:
+            return None
+
+        available_raw = max(0, balance_raw - matched_raw)
+        balance_shares = balance_raw / unit_per_share
+        matched_shares = matched_raw / unit_per_share
+        available_shares = available_raw / unit_per_share
+        order_shares = amount_raw / unit_per_share
+        available_whole_shares = int(available_raw // unit_per_share)
+        return {
+            "balance_shares": balance_shares,
+            "matched_shares": matched_shares,
+            "available_shares": available_shares,
+            "order_shares": order_shares,
+            "available_whole_shares": available_whole_shares,
+        }
+
+    def _available_tp_size_from_error(self, error_text: str, current_size: int) -> int | None:
+        share_state = self._tp_share_state_from_error(error_text, current_size)
+        if share_state is None:
+            return None
+        available_size = int(share_state["available_whole_shares"])
+        if 0 <= available_size < current_size:
+            return available_size
+        return None
+
+    def _build_snapshot(self) -> BookSnapshot:
+        primary_side, up_score, down_score = self._choose_primary_side()
+        primary_price = self._last_up_price if primary_side == "UP" else self._last_down_price
+        hedge_side = "DOWN" if primary_side == "UP" else "UP"
+        hedge_price = self._last_down_price if hedge_side == "DOWN" else self._last_up_price
+
+        pending_notional = round(sum(order.notional for order in self._order_map.values()), 2)
+        total_spend_raw = self._up_spend + self._down_spend
+        total_spend = round(total_spend_raw, 2)
+        committed_notional = round(total_spend + pending_notional, 2)
+        up_avg_price = (self._up_spend / self._up_shares) if self._up_shares else 0.0
+        down_avg_price = (self._down_spend / self._down_shares) if self._down_shares else 0.0
+        pair_avg_sum = up_avg_price + down_avg_price
+        guarantee_ratio = (min(self._up_shares, self._down_shares) / total_spend) if total_spend else 0.0
+        directional_ratio = (max(self._up_shares, self._down_shares) / total_spend) if total_spend else 0.0
+
+        primary_spend = self._up_spend if primary_side == "UP" else self._down_spend
+        hedge_spend = self._down_spend if primary_side == "UP" else self._up_spend
+        primary_spend_share = (primary_spend / total_spend) if total_spend else 0.0
+        hedge_spend_share = (hedge_spend / total_spend) if total_spend else 0.0
+        up_coverage = (self._up_shares / total_spend_raw) if total_spend_raw else 0.0
+        down_coverage = (self._down_shares / total_spend_raw) if total_spend_raw else 0.0
+        primary_coverage = up_coverage if primary_side == "UP" else down_coverage
+        hedge_coverage = down_coverage if primary_side == "UP" else up_coverage
+        up_pnl_if_win = self._up_shares - total_spend
+        down_pnl_if_win = self._down_shares - total_spend
+        best_case_pnl = max(up_pnl_if_win, down_pnl_if_win)
+        worst_case_loss = max(0.0, -up_pnl_if_win, -down_pnl_if_win)
+
+        return BookSnapshot(
+            up_shares=self._up_shares,
+            down_shares=self._down_shares,
+            up_spend=round(self._up_spend, 2),
+            down_spend=round(self._down_spend, 2),
+            pending_notional=pending_notional,
+            total_spend=total_spend,
+            committed_notional=committed_notional,
+            up_avg_price=up_avg_price,
+            down_avg_price=down_avg_price,
+            pair_avg_sum=pair_avg_sum,
+            guarantee_ratio=guarantee_ratio,
+            directional_ratio=directional_ratio,
+            primary_side=primary_side,
+            primary_price=primary_price or 0.0,
+            primary_score=up_score if primary_side == "UP" else down_score,
+            hedge_side=hedge_side,
+            hedge_price=hedge_price or 0.0,
+            hedge_score=down_score if primary_side == "UP" else up_score,
+            score_edge=abs(up_score - down_score),
+            primary_spend_share=primary_spend_share,
+            hedge_spend_share=hedge_spend_share,
+            primary_coverage=primary_coverage,
+            hedge_coverage=hedge_coverage,
+            up_pnl_if_win=up_pnl_if_win,
+            down_pnl_if_win=down_pnl_if_win,
+            best_case_pnl=best_case_pnl,
+            worst_case_loss=worst_case_loss,
+        )
+
+    def _choose_primary_side(self) -> tuple[str, float, float]:
+        if self._strategy_mode_strategy_0():
+            return self._choose_primary_side_scored()
+        up_score = self._last_up_price if self._last_up_price is not None else -1.0
+        down_score = self._last_down_price if self._last_down_price is not None else -1.0
+        primary_side = "UP" if up_score >= down_score else "DOWN"
+        self._strategy_primary_side = primary_side
+        return primary_side, up_score, down_score
+
+    def _choose_primary_side_scored(self) -> tuple[str, float, float]:
+        up_score = self._score_side("UP")
+        down_score = self._score_side("DOWN")
+        flip = self.config.strategy_primary_flip_threshold
+        if self._strategy_primary_side is not None:
+            current = up_score if self._strategy_primary_side == "UP" else down_score
+            other = down_score if self._strategy_primary_side == "UP" else up_score
+            if other - current < flip:
+                return self._strategy_primary_side, up_score, down_score
+        self._strategy_primary_side = "UP" if up_score >= down_score else "DOWN"
+        return self._strategy_primary_side, up_score, down_score
+
+    def _score_side(self, side_label: str) -> float:
+        current = self._last_up_price if side_label == "UP" else self._last_down_price
+        if current is None:
+            return -1.0
+
+        delta_30 = self._price_delta(side_label, 30)
+        delta_60 = self._price_delta(side_label, 60)
+        delta_90 = self._price_delta(side_label, 90)
+        return current + (0.8 * delta_30) + (0.5 * delta_60) + (0.3 * delta_90)
+
+    def _price_delta(self, side_label: str, lookback_seconds: int) -> float:
+        if not self._price_history:
+            return 0.0
+        current = self._last_up_price if side_label == "UP" else self._last_down_price
+        if current is None:
+            return 0.0
+        target_ts = self._last_price_time - lookback_seconds
+        for point in reversed(self._price_history):
+            if point.ts <= target_ts:
+                old_price = point.up_price if side_label == "UP" else point.down_price
+                return current - old_price
+        oldest = self._price_history[0]
+        old_price = oldest.up_price if side_label == "UP" else oldest.down_price
+        return current - old_price
+
+    def _winner_streak(self) -> tuple[str | None, int]:
+        if self._last_up_price is None or self._last_down_price is None:
+            return None, 0
+        current_winner = "UP" if self._last_up_price >= self._last_down_price else "DOWN"
+        streak = 0
+        for point in reversed(self._price_history):
+            winner = "UP" if point.up_price >= point.down_price else "DOWN"
+            if winner != current_winner:
+                break
+            streak += 1
+        return current_winner, streak
+
+    def _project_book(self, snapshot: BookSnapshot, side_label: str, price: float, shares: int) -> dict[str, float]:
+        up_shares = snapshot.up_shares + (shares if side_label == "UP" else 0)
+        down_shares = snapshot.down_shares + (shares if side_label == "DOWN" else 0)
+        up_spend = self._up_spend + (price * shares if side_label == "UP" else 0.0)
+        down_spend = self._down_spend + (price * shares if side_label == "DOWN" else 0.0)
+        total_spend = up_spend + down_spend
+        up_avg_price = (up_spend / up_shares) if up_shares else 0.0
+        down_avg_price = (down_spend / down_shares) if down_shares else 0.0
+        up_pnl_if_win = up_shares - total_spend
+        down_pnl_if_win = down_shares - total_spend
+        return {
+            "up_shares": up_shares,
+            "down_shares": down_shares,
+            "pair_sum": up_avg_price + down_avg_price,
+            "up_pnl_if_win": up_pnl_if_win,
+            "down_pnl_if_win": down_pnl_if_win,
+            "best_case_pnl": max(up_pnl_if_win, down_pnl_if_win),
+            "worst_case_loss": max(0.0, -up_pnl_if_win, -down_pnl_if_win),
+            "guarantee_ratio": (min(up_shares, down_shares) / total_spend) if total_spend else 0.0,
+            "directional_ratio": (max(up_shares, down_shares) / total_spend) if total_spend else 0.0,
+            "up_coverage": (up_shares / total_spend) if total_spend else 0.0,
+            "down_coverage": (down_shares / total_spend) if total_spend else 0.0,
+        }
+
+    def _side_price(self, side_label: str) -> float:
+        if side_label == "UP":
+            return self._last_up_price or 0.0
+        return self._last_down_price or 0.0
+
+    def _late_trend_side(self) -> str | None:
+        up_price = self._last_up_price
+        down_price = self._last_down_price
+        if up_price is None or down_price is None:
+            return None
+        if max(up_price, down_price) < LATE_TREND_CLEAR_PRICE:
+            return None
+        if abs(up_price - down_price) < LATE_TREND_CLEAR_EDGE:
+            return None
+        return "UP" if up_price > down_price else "DOWN"
+
+    def _choose_strategy_0_candidate(
+        self,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> OrderCandidate | None:
+        """Primary/hedge redeem logic aligned with run_named_profiles ``strategy_0`` / price-history replay."""
+        self._no_signal_reason = ""
+        lot = self.config.shares_per_level
+
+        if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return None
+        if seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            self._no_signal_reason = "past new-order cutoff"
+            return None
+        if (
+            snapshot.total_spend > 0
+            and snapshot.directional_ratio >= S0_TARGET_DIRECTIONAL_RATIO
+            and snapshot.guarantee_ratio >= S0_TARGET_GUARANTEE_RATIO
+        ):
+            self._no_signal_reason = "coverage targets already met"
+            return None
+
+        if elapsed >= S0_LATE_TREND_START_SECONDS:
+            trend_side = self._late_trend_side()
+            if trend_side is not None:
+                trend_price = self._side_price(trend_side)
+                hedge_side = "DOWN" if trend_side == "UP" else "UP"
+                hedge_price = self._side_price(hedge_side)
+                trend_shares = snapshot.up_shares if trend_side == "UP" else snapshot.down_shares
+                hedge_shares = snapshot.down_shares if trend_side == "UP" else snapshot.up_shares
+                total_sh = trend_shares + hedge_shares
+                trend_share_ratio = (trend_shares / total_sh) if total_sh else 0.0
+                trend_if_win = snapshot.up_pnl_if_win if trend_side == "UP" else snapshot.down_pnl_if_win
+                pair_ok = snapshot.pair_avg_sum <= 1.03 or snapshot.guarantee_ratio >= 0.95
+                if (
+                    trend_price <= S0_PRIMARY_PRICE_SOFT_MAX
+                    and pair_ok
+                    and (
+                        trend_shares <= hedge_shares
+                        or trend_share_ratio < S0_LATE_TREND_TARGET_SHARE
+                        or trend_if_win < S0_LATE_TREND_MIN_WIN_PNL
+                    )
+                ):
+                    return OrderCandidate(
+                        side_label=trend_side,
+                        kind="primary",
+                        reference_price=trend_price,
+                        limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, trend_price + 0.05),
+                        reason="s0_late_winner_press",
+                        shares=lot,
+                    )
+                if hedge_price <= S0_LATE_TREND_HEDGE_MAX_PRICE and snapshot.guarantee_ratio < 0.92:
+                    return OrderCandidate(
+                        side_label=hedge_side,
+                        kind="hedge",
+                        reference_price=hedge_price,
+                        limit_ceiling=min(S0_LATE_TREND_HEDGE_MAX_PRICE, hedge_price + 0.05),
+                        reason="s0_late_trend_hedge",
+                        shares=lot,
+                    )
+                if trend_side != snapshot.primary_side:
+                    self._no_signal_reason = "late trend lock (winner vs primary)"
+                    return None
+
+        if snapshot.total_spend == 0:
+            if S0_PRIMARY_PRICE_MIN <= snapshot.primary_price <= S0_PRIMARY_PRICE_SOFT_MAX:
+                return OrderCandidate(
+                    side_label=snapshot.primary_side,
+                    kind="primary",
+                    reference_price=snapshot.primary_price,
+                    limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                    reason="s0_initial_primary",
+                    shares=lot,
+                )
+            self._no_signal_reason = "initial primary outside entry band"
+            return None
+
+        if (
+            seconds_remaining <= S0_LATE_REPAIR_SECONDS
+            and snapshot.guarantee_ratio < 0.90
+            and snapshot.hedge_price <= S0_LATE_HEDGE_MAX_PRICE
+        ):
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(S0_LATE_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                reason="s0_late_repair",
+                shares=lot,
+            )
+
+        if (
+            snapshot.primary_spend_share < S0_PRIMARY_TARGET_SHARE
+            and S0_PRIMARY_PRICE_MIN <= snapshot.primary_price <= S0_PRIMARY_PRICE_MAX
+        ):
+            return OrderCandidate(
+                side_label=snapshot.primary_side,
+                kind="primary",
+                reference_price=snapshot.primary_price,
+                limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                reason="s0_build_primary",
+                shares=lot,
+            )
+
+        if (
+            snapshot.hedge_spend_share < S0_HEDGE_TARGET_SHARE
+            and snapshot.hedge_price <= S0_HEDGE_MAX_PRICE
+            and snapshot.guarantee_ratio < 0.95
+        ):
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(S0_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                reason="s0_cheap_hedge",
+                shares=lot,
+            )
+
+        if snapshot.directional_ratio < S0_TARGET_DIRECTIONAL_RATIO and snapshot.primary_price <= S0_PRIMARY_PRICE_SOFT_MAX:
+            return OrderCandidate(
+                side_label=snapshot.primary_side,
+                kind="primary",
+                reference_price=snapshot.primary_price,
+                limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                reason="s0_coverage_primary",
+                shares=lot,
+            )
+
+        if snapshot.guarantee_ratio < 0.85 and snapshot.hedge_price <= S0_LATE_HEDGE_MAX_PRICE:
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(S0_LATE_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                reason="s0_repair_hedge",
+                shares=lot,
+            )
+
+        self._no_signal_reason = "strategy_0: no entry rule fired"
+        return None
+
+    def _aa1_pair_cap_for_lead(self, lead_shares: int) -> float:
+        lead_orders = max(0, int(lead_shares // self.config.shares_per_level))
+        if lead_orders <= 1:
+            return 0.90
+        if lead_orders == 2:
+            return 0.92
+        if lead_orders == 3:
+            return 0.94
+        return 0.97
+
+    def _aa1_record_cheap_fill(self, side_label: str, price: float, elapsed: float) -> None:
+        self._aa1_cheap_lot_counts[side_label] += 1
+        self._aa1_last_cheap_buy_elapsed[side_label] = elapsed
+        self._aa1_last_cheap_buy_price[side_label] = price
+        self._aa1_unmatched_lots[side_label].append(
+            AA1CheapLot(
+                cheap_side=side_label,
+                cheap_price=price,
+                elapsed_sec=elapsed,
+            )
+        )
+
+    def _aa1_mark_balance_fill(self, reason: str) -> None:
+        parts = reason.split("|")
+        if len(parts) < 3:
+            return
+        cheap_side = parts[1]
+        try:
+            cheap_price = float(parts[2])
+        except ValueError:
+            return
+        lots = self._aa1_unmatched_lots.get(cheap_side, [])
+        for idx, lot in enumerate(lots):
+            if abs(lot.cheap_price - cheap_price) < 0.011:
+                lots.pop(idx)
+                return
+
+    def _aa1_choose_balance_candidate(self) -> OrderCandidate | None:
+        candidates: list[tuple[float, OrderCandidate]] = []
+        for cheap_side in ("UP", "DOWN"):
+            lots = self._aa1_unmatched_lots[cheap_side]
+            if not lots:
+                continue
+            balance_side = "DOWN" if cheap_side == "UP" else "UP"
+            balance_price = self._side_price(balance_side)
+            if balance_price <= 0:
+                continue
+            lead = (self._up_shares - self._down_shares) if cheap_side == "UP" else (self._down_shares - self._up_shares)
+            pair_cap = self._aa1_pair_cap_for_lead(lead)
+            balanceable = [(idx, lot) for idx, lot in enumerate(lots) if balance_price <= round(pair_cap - lot.cheap_price, 4)]
+            if not balanceable:
+                continue
+            _, target_lot = min(balanceable, key=lambda item: item[1].cheap_price)
+            candidates.append(
+                (
+                    target_lot.cheap_price,
+                    OrderCandidate(
+                        side_label=balance_side,
+                        kind="primary",
+                        reference_price=balance_price,
+                        limit_ceiling=min(PRIMARY_PRICE_HARD_MAX, balance_price + 0.05),
+                        reason=f"aa1_balance|{cheap_side}|{target_lot.cheap_price:.2f}|{pair_cap:.2f}",
+                        shares=self.config.shares_per_level,
+                    ),
+                )
+            )
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: item[0])[1]
+
+    def _choose_box_balance_candidate(
+        self,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        _seconds_remaining: float,
+    ) -> OrderCandidate | None:
+        """Two-sided book, slow adds; stop new buys only when both settlement PnLs are above threshold."""
+        self._no_signal_reason = ""
+        lot = self.config.shares_per_level
+        up_px = self._last_up_price or 0.0
+        down_px = self._last_down_price or 0.0
+        if up_px <= 0 or down_px <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return None
+
+        pu, pd = snapshot.up_pnl_if_win, snapshot.down_pnl_if_win
+        if pu > BOX_BOTH_WAYS_MIN_PNL_USDC and pd > BOX_BOTH_WAYS_MIN_PNL_USDC:
+            self._no_signal_reason = (
+                f"box: both outcomes profitable (if_UP=${pu:.2f} if_DOWN=${pd:.2f}) — stop new risk"
+            )
+            return None
+
+        u, d = int(snapshot.up_shares), int(snapshot.down_shares)
+        imb = u - d
+        imbalance_orders = abs(imb) // lot if lot else 0
+        force_balance = imbalance_orders >= BOX_MAX_OPEN_IMBALANCE_ORDERS
+        lag_side: str | None = "DOWN" if imb > 0 else "UP" if imb < 0 else None
+
+        pair_sum = up_px + down_px
+        spread = abs(up_px - down_px)
+        winner = "UP" if up_px >= down_px else "DOWN"
+        loser = "DOWN" if winner == "UP" else "UP"
+        win_px = up_px if winner == "UP" else down_px
+        lose_px = down_px if winner == "UP" else up_px
+
+        def allow_side(side: str, balance_priority: bool) -> tuple[bool, str]:
+            if self._box_lot_counts[side] >= BOX_MAX_LOTS_PER_SIDE:
+                return False, f"box: max lots/side ({BOX_MAX_LOTS_PER_SIDE}) on {side}"
+            prev = self._box_last_side_elapsed[side]
+            cooldown = BOX_BALANCE_COOLDOWN_SECONDS if balance_priority else BOX_SIDE_COOLDOWN_SECONDS
+            if prev is not None and elapsed - prev < cooldown:
+                return False, f"box: {cooldown}s cooldown on {side}"
+            ref = up_px if side == "UP" else down_px
+            if lot * ref < MIN_MARKETABLE_BUY_NOTIONAL - 1e-9:
+                return False, f"box: {side} below venue min notional"
+            return True, ""
+
+        def make(side: str, ref: float, reason: str) -> OrderCandidate | None:
+            bal_pri = force_balance and side == lag_side
+            ok, msg = allow_side(side, bal_pri)
+            if not ok:
+                self._no_signal_reason = msg
+                return None
+            return OrderCandidate(
+                side_label=side,
+                kind="primary",
+                reference_price=ref,
+                limit_ceiling=min(PRIMARY_PRICE_HARD_MAX, ref + 0.05),
+                reason=reason,
+                shares=lot,
+            )
+
+        if lag_side and force_balance:
+            ref = down_px if lag_side == "DOWN" else up_px
+            c = make(lag_side, ref, "box_balance|hedge_lagging")
+            if c:
+                return c
+            return None
+
+        if u == 0 and d == 0:
+            open_ok = BOX_OPEN_PAIR_MIN <= pair_sum <= BOX_OPEN_PAIR_MAX and spread <= BOX_OPEN_SPREAD_MAX
+            fallback_ok = (
+                elapsed >= BOX_OPEN_FALLBACK_ELAPSED_SECONDS
+                and pair_sum <= BOX_OPEN_FALLBACK_PAIR_MAX
+                and spread <= BOX_OPEN_FALLBACK_SPREAD_MAX
+                and min(up_px, down_px) >= 0.03
+            )
+            patience_ok = (
+                elapsed >= BOX_OPEN_PATIENCE_ELAPSED_SECONDS
+                and pair_sum <= BOX_OPEN_PATIENCE_PAIR_MAX
+                and spread <= BOX_OPEN_PATIENCE_SPREAD_MAX
+                and 0.02 <= min(up_px, down_px)
+                and max(up_px, down_px) <= 0.97
+            )
+            if not open_ok and not fallback_ok and not patience_ok:
+                self._no_signal_reason = "box: wait for openable pair"
+                return None
+            side = "UP" if up_px <= down_px else "DOWN"
+            ref = up_px if side == "UP" else down_px
+            if open_ok:
+                tag = "box_balance|open_first_leg"
+            elif fallback_ok:
+                tag = "box_balance|open_first_leg_fallback"
+            else:
+                tag = "box_balance|open_first_leg_patience"
+            return make(side, ref, tag)
+
+        if u == 0 or d == 0:
+            missing = "DOWN" if u > 0 else "UP"
+            ref = down_px if missing == "DOWN" else up_px
+            if pair_sum <= BOX_SECOND_LEG_PAIR_MAX and spread <= BOX_SECOND_LEG_SPREAD_MAX:
+                c = make(missing, ref, "box_balance|complete_second_leg")
+                if c:
+                    return c
+            self._no_signal_reason = "box: wait for second leg at reasonable pair"
+            return None
+
+        if BOX_PAIR_MIN <= pair_sum <= BOX_PAIR_MAX and spread <= BOX_PAIR_SPREAD_MAX:
+            if u < d:
+                c = make("UP", up_px, "box_balance|pair_balance_up")
+                if c:
+                    return c
+            elif d < u:
+                c = make("DOWN", down_px, "box_balance|pair_balance_down")
+                if c:
+                    return c
+            else:
+                side = "UP" if up_px <= down_px else "DOWN"
+                ref = up_px if side == "UP" else down_px
+                c = make(side, ref, "box_balance|pair_add_even")
+                if c:
+                    return c
+
+        if lose_px <= BOX_LOSER_PRICE_MAX and spread >= BOX_LOSER_SPREAD_MIN:
+            c = make(loser, lose_px, "box_balance|loser_scoop")
+            if c:
+                return c
+
+        if spread >= BOX_WINNER_SPREAD_MIN and BOX_WINNER_PRICE_MIN <= win_px <= BOX_WINNER_PRICE_MAX:
+            c = make(winner, win_px, "box_balance|winner_lean")
+            if c:
+                return c
+
+        self._no_signal_reason = "box: no rule fired"
+        return None
+
+    def _mimic_evaluate_tick(self, elapsed: float) -> None:
+        """Append mimic buy intents to the queue (same rules as fit_wallet10_mimic.simulate_window_fixed_lot)."""
+        self._no_signal_reason = ""
+        if not self._strategy_mode_mimic():
+            return
+        p = self._mimic_params
+        up_price = self._last_up_price or 0.0
+        down_price = self._last_down_price or 0.0
+        if up_price <= 0 or down_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return
+
+        entry_delay = float(p["entry_delay"])
+        cutoff = float(p["cutoff"])
+        if elapsed < entry_delay:
+            self._no_signal_reason = "before mimic entry_delay"
+            return
+        if elapsed > cutoff:
+            self._no_signal_reason = "past mimic elapsed cutoff"
+            return
+
+        lot = self.config.shares_per_level
+        pair_sum = up_price + down_price
+        spread = abs(up_price - down_price)
+        winner = "UP" if up_price >= down_price else "DOWN"
+        loser = "DOWN" if winner == "UP" else "UP"
+        win_price = up_price if winner == "UP" else down_price
+        lose_price = down_price if winner == "UP" else up_price
+
+        if winner == self._mimic_prev_winner:
+            self._mimic_consecutive_same_winner += 1
+        else:
+            self._mimic_consecutive_same_winner = 1
+        self._mimic_prev_winner = winner
+
+        def min_notional_ok(px: float) -> bool:
+            return lot * px >= MIN_MARKETABLE_BUY_NOTIONAL - 1e-9
+
+        def ceiling(ref: float) -> float:
+            return min(PRIMARY_PRICE_HARD_MAX, ref + 0.05)
+
+        if (
+            pair_sum >= p["pair_min"]
+            and pair_sum <= p["pair_max"]
+            and spread <= p["pair_spread_max"]
+            and elapsed - self._mimic_last_pair_elapsed >= p["pair_cooldown"]
+            and min_notional_ok(up_price)
+            and min_notional_ok(down_price)
+        ):
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label="UP",
+                    kind="primary",
+                    reference_price=up_price,
+                    limit_ceiling=ceiling(up_price),
+                    reason="mimic_pair_up",
+                    shares=lot,
+                )
+            )
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label="DOWN",
+                    kind="primary",
+                    reference_price=down_price,
+                    limit_ceiling=ceiling(down_price),
+                    reason="mimic_pair_down",
+                    shares=lot,
+                )
+            )
+            self._mimic_last_pair_elapsed = elapsed
+
+        if (
+            spread >= p["winner_spread_min"]
+            and win_price >= p["winner_price_min"]
+            and win_price <= p["winner_price_max"]
+            and self._mimic_consecutive_same_winner >= p["winner_confirm"]
+            and elapsed - self._mimic_last_winner_elapsed >= p["winner_cooldown"]
+            and min_notional_ok(win_price)
+        ):
+            side = winner
+            ref = win_price
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label=side,
+                    kind="primary",
+                    reference_price=ref,
+                    limit_ceiling=ceiling(ref),
+                    reason="mimic_winner_lean",
+                    shares=lot,
+                )
+            )
+            self._mimic_last_winner_elapsed = elapsed
+
+        if (
+            lose_price <= p["loser_price_max"]
+            and spread >= p["loser_spread_min"]
+            and elapsed - self._mimic_last_loser_elapsed >= p["loser_cooldown"]
+            and min_notional_ok(lose_price)
+        ):
+            side = loser
+            ref = lose_price
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label=side,
+                    kind="primary",
+                    reference_price=ref,
+                    limit_ceiling=ceiling(ref),
+                    reason="mimic_loser_scoop",
+                    shares=lot,
+                )
+            )
+            self._mimic_last_loser_elapsed = elapsed
+
+        if (
+            elapsed >= p["reversal_start"]
+            and spread >= p["reversal_spread_min"]
+            and lose_price >= p["reversal_loser_min"]
+            and lose_price <= p["reversal_loser_max"]
+            and elapsed - self._mimic_last_reversal_elapsed >= p["reversal_cooldown"]
+            and min_notional_ok(lose_price)
+        ):
+            side = loser
+            ref = lose_price
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label=side,
+                    kind="primary",
+                    reference_price=ref,
+                    limit_ceiling=ceiling(ref),
+                    reason="mimic_reversal",
+                    shares=lot,
+                )
+            )
+            self._mimic_last_reversal_elapsed = elapsed
+
+        if (
+            elapsed >= p["lottery_start"]
+            and lose_price <= p["lottery_price_max"]
+            and elapsed - self._mimic_last_lottery_elapsed >= p["lottery_cooldown"]
+            and min_notional_ok(lose_price)
+        ):
+            side = loser
+            ref = lose_price
+            self._mimic_action_queue.append(
+                OrderCandidate(
+                    side_label=side,
+                    kind="primary",
+                    reference_price=ref,
+                    limit_ceiling=ceiling(ref),
+                    reason="mimic_lottery",
+                    shares=lot,
+                )
+            )
+            self._mimic_last_lottery_elapsed = elapsed
+
+        if not self._mimic_action_queue and not self._no_signal_reason:
+            self._no_signal_reason = "mimic: no rule fired this tick"
+
+    def _choose_aa1_candidate(
+        self,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> OrderCandidate | None:
+        self._no_signal_reason = ""
+
+        if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return None
+
+        if seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            self._no_signal_reason = "past new-order cutoff"
+            return None
+
+        balance_candidate = self._aa1_choose_balance_candidate()
+        if balance_candidate is not None:
+            return balance_candidate
+
+        up_price = self._side_price("UP")
+        down_price = self._side_price("DOWN")
+        cheap_side = "UP" if up_price < down_price else "DOWN"
+        cheap_price = up_price if cheap_side == "UP" else down_price
+        if cheap_price > AA1_CHEAP_ENTRY_MAX:
+            self._no_signal_reason = "cheap side above entry max"
+            return None
+        imbalance_orders = abs(snapshot.up_shares - snapshot.down_shares) // self.config.shares_per_level
+        if imbalance_orders >= AA1_MAX_OPEN_IMBALANCE_ORDERS:
+            self._no_signal_reason = "book too imbalanced; waiting for balance"
+            return None
+        if self._aa1_cheap_lot_counts[cheap_side] >= AA1_MAX_CHEAP_LOTS_PER_SIDE:
+            self._no_signal_reason = f"max cheap lots reached on {cheap_side}"
+            return None
+
+        prev_elapsed = self._aa1_last_cheap_buy_elapsed[cheap_side]
+        prev_price = self._aa1_last_cheap_buy_price[cheap_side]
+        if prev_elapsed is not None and elapsed - prev_elapsed < AA1_CHEAP_COOLDOWN_SECONDS:
+            self._no_signal_reason = f"cheap-buy cooldown active on {cheap_side}"
+            return None
+        if prev_price is not None and cheap_price > round(prev_price - AA1_CHEAP_REPEAT_DROP, 4):
+            self._no_signal_reason = f"cheap price has not improved enough on {cheap_side}"
+            return None
+
+        return OrderCandidate(
+            side_label=cheap_side,
+            kind="primary",
+            reference_price=cheap_price,
+            limit_ceiling=min(PRIMARY_PRICE_HARD_MAX, cheap_price + 0.05),
+            reason="aa1_buy_cheap",
+            shares=self.config.shares_per_level,
+        )
+
+    def _can_place_candidate(
+        self,
+        snapshot: BookSnapshot,
+        candidate: OrderCandidate,
+        open_orders: list[dict[str, Any]],
+        elapsed: float,
+    ) -> bool:
+        if time.time() - self._last_order_time < self.config.order_cooldown_seconds:
+            self._no_signal_reason = "order cooldown active"
+            return False
+
+        if len(open_orders) >= self.config.strategy_max_live_orders:
+            self._no_signal_reason = "live order cap reached"
+            return False
+
+        if any(order.side_label == candidate.side_label for order in self._order_map.values()):
+            self._no_signal_reason = f"pending {candidate.side_label} order already live"
+            return False
+
+        phase_cap = self._phase_cap_usdc(elapsed)
+        estimated_limit = round(
+            min(candidate.limit_ceiling, candidate.reference_price + self.config.strategy_price_buffer),
+            2,
+        )
+        reference_notional = estimated_limit * candidate.shares
+        if (
+            candidate.kind == "hedge"
+            and candidate.reference_price * candidate.shares < MIN_MARKETABLE_BUY_NOTIONAL
+        ):
+            self._no_signal_reason = (
+                f"hedge notional ${candidate.reference_price * candidate.shares:.2f} "
+                f"below ${MIN_MARKETABLE_BUY_NOTIONAL:.2f} venue minimum"
+            )
+            return False
+
+        committed = self._up_spend + self._down_spend + sum(order.notional for order in self._order_map.values())
+        if committed + reference_notional > phase_cap:
+            self._no_signal_reason = "phase budget exhausted"
+            return False
+
+        if committed + reference_notional > self._window_budget_usdc:
+            self._no_signal_reason = "window budget exhausted"
+            return False
+
+        return True
+
+    def _place_candidate(
+        self,
+        contract: ActiveContract,
+        candidate: OrderCandidate,
+        snapshot: BookSnapshot,
+        elapsed: float,
+    ) -> bool:
+        token = contract.up if candidate.side_label == "UP" else contract.down
+        limit_price = self._resolve_limit_price(token, candidate.reference_price, candidate.limit_ceiling)
+        shares = candidate.shares
+        order_kind = candidate.kind.upper()
+        actual_notional = limit_price * shares
+        if actual_notional < MIN_MARKETABLE_BUY_NOTIONAL:
+            self._no_signal_reason = (
+                f"buy notional ${actual_notional:.2f} below ${MIN_MARKETABLE_BUY_NOTIONAL:.2f} venue minimum"
+            )
+            return False
+
+        phase_cap = self._phase_cap_usdc(elapsed)
+        committed = self._up_spend + self._down_spend + sum(order.notional for order in self._order_map.values())
+        if committed + actual_notional > phase_cap:
+            self._no_signal_reason = "phase budget exhausted by actual limit"
+            return False
+        if committed + actual_notional > self._window_budget_usdc:
+            self._no_signal_reason = "window budget exhausted by actual limit"
+            return False
+
+        projection = self._project_book(snapshot, candidate.side_label, limit_price, shares)
+
+        if self.config.dry_run:
+            order_id = "dry_%d_%s" % (int(time.time() * 1000), candidate.side_label.lower())
+            self._order_map[order_id] = ManagedOrder(
+                order_id=order_id,
+                side_label=candidate.side_label,
+                kind=candidate.kind,
+                price=limit_price,
+                shares=shares,
+                placed_at=time.time(),
+                reason=candidate.reason,
+            )
+            self._record_order_metrics(candidate.kind)
+            LOGGER.info(
+                "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | reason=%s",
+                order_kind,
+                contract.slug,
+                candidate.side_label,
+                candidate.reference_price,
+                limit_price,
+                shares,
+                projection["pair_sum"],
+                candidate.reason,
+            )
+            return True
+
+        try:
+            resp = self.trader.place_limit_buy(token, limit_price, shares)
+            order_id = str(resp.get("orderID") or resp.get("id") or "")
+        except Exception as exc:
+            self._no_signal_reason = f"order placement failed: {exc}"
+            LOGGER.error(
+                "[ORDER FAILED] %s | kind=%s | side=%s | limit=$%.2f | %s",
+                contract.slug,
+                candidate.kind,
+                candidate.side_label,
+                limit_price,
+                exc,
+            )
+            return False
+
+        if not order_id:
+            self._no_signal_reason = "order response missing id"
+            LOGGER.warning(
+                "[ORDER MISSING ID] %s | kind=%s | side=%s | resp=%s",
+                contract.slug,
+                candidate.kind,
+                candidate.side_label,
+                resp,
+            )
+            return False
+
+        self._order_map[order_id] = ManagedOrder(
+            order_id=order_id,
+            side_label=candidate.side_label,
+            kind=candidate.kind,
+            price=limit_price,
+            shares=shares,
+            placed_at=time.time(),
+            reason=candidate.reason,
+        )
+        self._record_order_metrics(candidate.kind)
+        LOGGER.info(
+            "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | reason=%s",
+            order_kind,
+            contract.slug,
+            candidate.side_label,
+            candidate.reference_price,
+            limit_price,
+            shares,
+            projection["pair_sum"],
+            order_id[:16],
+            candidate.reason,
+        )
+        return True
+
+    def _record_order_metrics(self, kind: str) -> None:
+        self._orders_placed += 1
+        self._last_order_time = time.time()
+        if kind == "primary":
+            self._primary_orders += 1
+        else:
+            self._hedge_orders += 1
+
+    def _resolve_limit_price(self, token: TokenMarket, reference_price: float, limit_ceiling: float) -> float:
+        proposed = round(min(limit_ceiling, reference_price + self.config.strategy_price_buffer), 2)
+        best_ask = self.trader.get_best_ask(token.token_id)
+        if best_ask is not None and 0.01 <= best_ask <= limit_ceiling:
+            return round(best_ask, 2)
+        return max(0.01, min(0.99, proposed))
+
+    def _phase_cap_usdc(self, elapsed: float) -> float:
+        for upper_bound, share in PHASE_SPEND_CAPS:
+            if elapsed <= upper_bound:
+                return round(self._window_budget_usdc * share, 2)
+        return self._window_budget_usdc
+
+    def _effective_budget(self, wallet_balance_usdc: float) -> float:
+        if self.config.dry_run and wallet_balance_usdc <= 0:
+            return self.config.strategy_budget_cap_usdc
+        return max(
+            0.0,
+            min(
+                self.config.strategy_budget_cap_usdc,
+                wallet_balance_usdc - self.config.strategy_wallet_reserve_usdc,
+            ),
+        )
+
+    def _get_contract_orders(self, contract: ActiveContract) -> list[dict[str, Any]]:
+        token_ids = {contract.up.token_id, contract.down.token_id}
+        all_orders = self.trader.get_open_orders()
+        return [
+            order
+            for order in all_orders
+            if str(
+                order.get("asset_id")
+                or order.get("assetId")
+                or order.get("token_id")
+                or order.get("tokenId")
+                or ""
+            ) in token_ids
+        ]
+
+    def _extract_live_ids(self, open_orders: list[dict[str, Any]]) -> set[str]:
+        live_ids = set()
+        for order in open_orders:
+            order_id = str(order.get("id") or order.get("orderID") or "")
+            if order_id:
+                live_ids.add(order_id)
+        return live_ids
+
+    def _cancel_order_safe(self, order_id: str, reason: str) -> None:
+        order = self._order_map.get(order_id)
+        if order is None:
+            return
+
+        if not self.config.dry_run:
+            try:
+                self.trader.cancel_order(order_id)
+            except Exception as exc:
+                LOGGER.warning("[CANCEL FAILED] order=%s | reason=%s | %s", order_id[:16], reason, exc)
+                return
+        self._order_map.pop(order_id, None)
+        self._cancels += 1
+
+    def _token_delta(self, token: TokenMarket, baseline: float) -> float:
+        return round(self.trader.token_balance(token.token_id) - baseline, 4)
+
+    def _log_heartbeat(
+        self,
+        contract: ActiveContract,
+        snapshot: BookSnapshot,
+        open_orders: list[dict[str, Any]],
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> None:
+        phase_cap = self._phase_cap_usdc(elapsed)
+        LOGGER.info(
+            "[HEARTBEAT] %s | elapsed=%ds remaining=%ds | UP=$%.4f DOWN=$%.4f | primary=%s | spend=$%.2f committed=$%.2f cap=$%.2f/$%.2f | shares=%d/%d | avg=%.3f/%.3f pair=%.3f | guarantee=%.3f directional=%.3f | pnl_if_up=$%.2f pnl_if_down=$%.2f | open_orders=%d fills=%d cancels=%d",
+            contract.slug,
+            int(elapsed),
+            int(seconds_remaining),
+            self._last_up_price or 0.0,
+            self._last_down_price or 0.0,
+            snapshot.primary_side,
+            snapshot.total_spend,
+            snapshot.committed_notional,
+            phase_cap,
+            self._window_budget_usdc,
+            snapshot.up_shares,
+            snapshot.down_shares,
+            snapshot.up_avg_price,
+            snapshot.down_avg_price,
+            snapshot.pair_avg_sum,
+            snapshot.guarantee_ratio,
+            snapshot.directional_ratio,
+            snapshot.up_pnl_if_win,
+            snapshot.down_pnl_if_win,
+            len(open_orders),
+            self._fills,
+            self._cancels,
+        )
+
+    def _maybe_record_price_snapshot(
+        self,
+        contract: ActiveContract,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> None:
+        return
