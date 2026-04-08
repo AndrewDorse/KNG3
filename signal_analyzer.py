@@ -10,8 +10,8 @@ after each fill to free cash.
 Set BOT_STRATEGY_MODE=signal_only to let this module handle all orders
 while the engine still polls prices, heartbeats, and detects fills.
 
-42 active patterns.
-v2(5) + v3(9) + v4(9) + v5(4) + v6(9) + v7(6).
+46 active patterns.
+v2(5) + v3(9) + v4(9) + v5(4) + v6(9) + v7(9).
 
 All prob/EV values below are ACTUAL TESTED (not claimed).
 EV = average net profit per fire (5 shares).
@@ -31,6 +31,38 @@ CLIP = 5
 TP_PRICE = 0.99
 SIGNAL_BUY_PRICE_PAD = 0.03
 MAX_ORDERS_PER_WINDOW = 8
+BTC_LAYER_PATTERN_COUNT = 7
+
+# Best blended set from BTC overlay search.
+# If BTC data is available, these classic signals require the listed BTC confirmation
+# filters before firing. If BTC is unavailable, the classic signal still fires.
+CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
+    "vshape_t600_lb240_b0.12": ("range_le_120_0.0016",),
+    "rdiv_t600_w180_r0.08_f0.01": ("range_le_120_0.0016",),
+    "vshape_t600_lb240_b0.08": ("range_le_120_0.0016",),
+    "diverge_t345_w60_r005": ("range_le_30_0.0004",),
+    "losercap_t315_bo015_fw15_f001": ("range_le_90_0.0012",),
+    "reversal_300_to_600": ("range_le_120_0.002",),
+    "dom_t720_lead30": ("range_le_45_0.0012",),
+    "spread_t720_ge06": ("range_le_45_0.0012",),
+    "spread_squeeze_t720_drop20": ("range_le_45_0.0012",),
+    "crossover_t600_k60": ("range_le_90_0.0016",),
+    "ratio_t720_ge4": ("range_le_45_0.0012",),
+    "rddrecov_t360_dd0.2_r0.75": ("range_le_30_0.001",),
+    "accum_t615_b20_n3": ("range_le_75_0.0016", "rebound_ge_120_0.0004"),
+    "rddrecov_t360_dd0.15_r0.75": ("range_le_30_0.001",),
+    "low_vol_t720_flip2": ("range_le_45_0.0008",),
+    "loserfloor_t495": ("range_le_15_0.0012",),
+    "lbounce_t240_r60_f15_rm005_fm006": ("range_le_30_0.0008", "rebound_ge_180_0.0004"),
+    "crossover_t600_k30": ("range_le_60_0.0008",),
+    "midcert_t360_dp80": ("rebound_ge_210_0.0005", "range_le_30_0.0005"),
+    "flipband_t720_0to1": ("range_le_45_0.0008",),
+    "velocity_t720_w60": ("range_le_90_0.0025",),
+    "low_vol_t600_flip2": ("range_le_45_0.0005",),
+    "vel_t855_w60_v004": ("rebound_ge_240_0.0004",),
+    "vel_t693_w60_v004": ("range_le_60_0.0016",),
+    "vel_t645_w90_v003": ("range_le_60_0.0012", "rebound_ge_120_0.0004"),
+}
 
 
 @dataclass
@@ -71,7 +103,7 @@ class SignalAnalyzer:
         self._thread = threading.Thread(target=self._run, daemon=True, name="signal_analyzer")
         self._thread.start()
         mode_label = "LIVE -- orders enabled" if self._live else "log-only"
-        SIGLOG.info("[SIGNAL] analyzer thread started (%s) | 42 patterns active", mode_label)
+        SIGLOG.info("[SIGNAL] analyzer thread started (%s) | 46 patterns active", mode_label)
 
     def stop(self) -> None:
         self._stop.set()
@@ -154,11 +186,17 @@ class SignalAnalyzer:
                 name, MAX_ORDERS_PER_WINDOW, self._window_slug,
             )
             return False
+        if price >= 0.98:
+            SIGLOG.info(
+                "[SIGNAL] BUY SKIPPED %s | %s current price too high (%.2f) | window=%s",
+                name, side, price, self._window_slug,
+            )
+            return False
         token = self._get_token(side)
         if token is None:
             SIGLOG.warning("[SIGNAL] no token for %s -- skipping %s", side, name)
             return False
-        limit = round(min(price + SIGNAL_BUY_PRICE_PAD, 0.97), 2)
+        limit = round(min(price + SIGNAL_BUY_PRICE_PAD, 0.95), 2)
         notional = limit * CLIP
         try:
             resp = self._trader.place_limit_buy(token, limit, CLIP)
@@ -202,6 +240,8 @@ class SignalAnalyzer:
     # Signal fire (with live order)
     # ------------------------------------------------------------------
     def _fire(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> None:
+        if not self._btc_overlay_allows(name, side):
+            return
         if name in self._signals_fired:
             return
         self._signals_fired.add(name)
@@ -247,6 +287,119 @@ class SignalAnalyzer:
 
     def _side_price(self, snap: _PriceSnap, side: str) -> float:
         return snap.up if side == "Up" else snap.down
+
+    def _btc_ready(self) -> bool:
+        eng = self._engine
+        return eng is not None and getattr(eng, "_last_btc_price", None) is not None
+
+    def _btc_price_near(self, target_elapsed: float, tolerance: float = 15.0) -> float | None:
+        eng = self._engine
+        if eng is None:
+            return None
+        history = getattr(eng, "_btc_price_history", None)
+        if not history:
+            return None
+        target_ts = self._window_start_ts + target_elapsed
+        best = None
+        best_dist = 999.0
+        for point in history:
+            dist = abs(point.ts - target_ts)
+            if dist < best_dist:
+                best_dist = dist
+                best = point
+        if best is None or best_dist > tolerance:
+            return None
+        return float(best.price)
+
+    def _btc_move(self, end_elapsed: float, lookback_seconds: float) -> float | None:
+        end_elapsed = max(0.0, end_elapsed)
+        now_px = self._btc_price_near(end_elapsed)
+        old_px = self._btc_price_near(max(0.0, end_elapsed - lookback_seconds))
+        if now_px is None or old_px is None or old_px <= 0:
+            return None
+        return (now_px - old_px) / old_px
+
+    def _btc_range(self, end_elapsed: float, lookback_seconds: float, step_seconds: float = 5.0) -> float | None:
+        start_elapsed = max(0.0, end_elapsed - lookback_seconds)
+        prices: list[float] = []
+        probe = start_elapsed
+        while probe <= end_elapsed:
+            px = self._btc_price_near(probe)
+            if px is not None:
+                prices.append(px)
+            probe += step_seconds
+        if len(prices) < 2:
+            return None
+        lo = min(prices)
+        hi = max(prices)
+        if lo <= 0:
+            return None
+        return (hi - lo) / lo
+
+    def _btc_rebound(self, end_elapsed: float, lookback_seconds: float, side: str) -> float | None:
+        start_elapsed = max(0.0, end_elapsed - lookback_seconds)
+        prices: list[float] = []
+        probe = start_elapsed
+        while probe <= end_elapsed:
+            px = self._btc_price_near(probe)
+            if px is not None:
+                prices.append(px)
+            probe += 5.0
+        if len(prices) < 2:
+            return None
+        last = prices[-1]
+        if side == "Up":
+            lo = min(prices)
+            if lo <= 0:
+                return None
+            return (last - lo) / lo
+        hi = max(prices)
+        if hi <= 0:
+            return None
+        return (hi - last) / hi
+
+    def _btc_accel(self, end_elapsed: float, lookback_seconds: float) -> float | None:
+        if end_elapsed < 2 * lookback_seconds:
+            return None
+        prev_move = self._btc_move(end_elapsed - lookback_seconds, lookback_seconds)
+        cur_move = self._btc_move(end_elapsed, lookback_seconds)
+        if prev_move is None or cur_move is None:
+            return None
+        return abs(cur_move) - abs(prev_move)
+
+    def _btc_filter_passes(self, filter_spec: str, side: str, elapsed: float) -> bool:
+        parts = filter_spec.split("_")
+        if len(parts) < 3:
+            return True
+        kind = "_".join(parts[:-2])
+        lookback = float(parts[-2])
+        threshold = float(parts[-1])
+        if kind == "range_le":
+            value = self._btc_range(elapsed, lookback)
+            return value is not None and value <= threshold
+        if kind == "rebound_ge":
+            value = self._btc_rebound(elapsed, lookback, side)
+            return value is not None and value >= threshold
+        if kind == "move_up":
+            value = self._btc_move(elapsed, lookback)
+            return value is not None and value >= threshold
+        if kind == "move_dn":
+            value = self._btc_move(elapsed, lookback)
+            return value is not None and value <= -threshold
+        if kind == "accel_ge":
+            value = self._btc_accel(elapsed, lookback)
+            return value is not None and value >= threshold
+        return True
+
+    def _btc_overlay_allows(self, name: str, side: str) -> bool:
+        filters = CLASSIC_BTC_CONFIRMATION_FILTERS.get(name)
+        if not filters:
+            return True
+        # Fallback behavior: if BTC feed/history is unavailable, keep the classic signal live.
+        if not self._btc_ready():
+            return True
+        elapsed = self._history[-1].elapsed if self._history else 0.0
+        return all(self._btc_filter_passes(spec, side, elapsed) for spec in filters)
 
     # ------------------------------------------------------------------
     # Pattern evaluators  (44 active -- tested on 178 windows)
@@ -371,12 +524,6 @@ class SignalAnalyzer:
         # v4 PATTERNS (20-29)
         # ==============================================================
 
-        # 20. bothcheap_t615  (100% | n=10 | win +$2.19 | loss $0 | ev +$2.20)
-        if 613 <= elapsed <= 620:
-            if d_px <= 0.60 and l_px <= 0.45:
-                self._fire("bothcheap_t615", dom, d_px, "100%", "+$2.20",
-                           f"dom={d_px:.2f} loser={l_px:.2f}")
-
         # 21. crossover_t585_k45  (100% | n=10 | win +$2.12 | loss $0 | ev +$2.12)
         if 583 <= elapsed <= 590:
             dom_540 = self._dom_at_elapsed(540)
@@ -442,20 +589,6 @@ class SignalAnalyzer:
                 elif vd >= 0.003 and vd > vu:
                     self._fire("vel_t645_w90_v003", "Down", snap.down, "100%", "+$1.07",
                                f"vel={vd:.4f}/s")
-
-        # 27. squeeze_t345_d025  (96% | n=27 | win +$0.73 | loss -$3.90 | ev +$0.56)
-        if 343 <= elapsed <= 350 and self._loser_at_60 is not None:
-            drop = self._loser_at_60 - l_px
-            if drop >= 0.25:
-                self._fire("squeeze_t345_d025", dom, d_px, "96%", "+$0.56",
-                           f"loser_drop={drop:.3f}")
-
-        # 28. ratio_t315_ge6  (100% | n=14 | win +$0.54 | loss $0 | ev +$0.54)
-        if 313 <= elapsed <= 320 and l_px > 0.01:
-            ratio = d_px / l_px
-            if ratio >= 6.0:
-                self._fire("ratio_t315_ge6", dom, d_px, "100%", "+$0.54",
-                           f"ratio={ratio:.1f}")
 
         # ==============================================================
         # v5 PATTERNS (29-32)
@@ -717,3 +850,116 @@ class SignalAnalyzer:
             if abs(loser_now - loser_min) < 0.005:
                 self._fire("loserfloor_t495", dom, d_px, "100%", "+$0.46",
                            f"loser_now={loser_now:.3f} loser_min={loser_min:.3f}")
+
+        # ==============================================================
+        # BTC LAYER PATTERNS (48-54) -- optional, require live BTC feed
+        # ==============================================================
+        if not self._btc_ready():
+            return
+
+        # 48. vshape_t600_lb240_b0.12_btcm240dn0002
+        # Mixed layer: strong v-shape works better when BTC has been weak over prior 240s.
+        if 598 <= elapsed <= 605:
+            btc_m240 = self._btc_move(elapsed, 240)
+            if btc_m240 is not None and btc_m240 <= -0.000202:
+                for side in ("Up", "Down"):
+                    px_min = min(self._side_price(s, side) for s in self._history if 360 <= s.elapsed <= 480)
+                    px_now = self._side_price(snap, side)
+                    if px_now - px_min >= 0.12:
+                        self._fire(
+                            "vshape_t600_lb240_b0.12_btcm240dn0002",
+                            side,
+                            px_now,
+                            "91%",
+                            "+$0.78",
+                            f"v_bounce={px_now - px_min:.3f} btc_m240={btc_m240:.4%}",
+                        )
+                        break
+
+        # 49. btcagree_t525_lb180_m0.001
+        if 523 <= elapsed <= 530 and lead >= 0.05:
+            btc_m180 = self._btc_move(elapsed, 180)
+            if btc_m180 is not None and abs(btc_m180) >= 0.001:
+                btc_side = "Up" if btc_m180 > 0 else "Down"
+                if btc_side == dom:
+                    self._fire(
+                        "btcagree_t525_lb180_m0.001",
+                        dom,
+                        d_px,
+                        "100%",
+                        "+$0.55",
+                        f"lead={lead:.3f} btc_m180={btc_m180:.4%}",
+                    )
+
+        # 50. btcbreak_t600_sq30_mv45_r0.0006_m0.0004
+        if 598 <= elapsed <= 605 and lead >= 0.05:
+            btc_rng30 = self._btc_range(elapsed, 30)
+            btc_m45 = self._btc_move(elapsed, 45)
+            if (
+                btc_rng30 is not None
+                and btc_m45 is not None
+                and btc_rng30 <= 0.0006
+                and abs(btc_m45) >= 0.0004
+            ):
+                btc_side = "Up" if btc_m45 > 0 else "Down"
+                if btc_side == dom:
+                    self._fire(
+                        "btcbreak_t600_sq30_mv45_r0.0006_m0.0004",
+                        dom,
+                        d_px,
+                        "100%",
+                        "+$0.66",
+                        f"lead={lead:.3f} btc_rng30={btc_rng30:.4%} btc_m45={btc_m45:.4%}",
+                    )
+
+        # 51. btcsqz_t690_lb30_r0.0006_l0.12
+        if 688 <= elapsed <= 695 and lead >= 0.12:
+            btc_rng30 = self._btc_range(elapsed, 30)
+            if btc_rng30 is not None and btc_rng30 <= 0.0006:
+                self._fire(
+                    "btcsqz_t690_lb30_r0.0006_l0.12",
+                    dom,
+                    d_px,
+                    "94%",
+                    "+$0.30",
+                    f"lead={lead:.3f} btc_rng30={btc_rng30:.4%}",
+                )
+
+        # 52. btcrev_t585_lb180_r0.0005
+        if 583 <= elapsed <= 590 and lead >= 0.05:
+            btc_rebound180 = self._btc_rebound(elapsed, 180, dom)
+            if btc_rebound180 is not None and btc_rebound180 >= 0.0005:
+                self._fire(
+                    "btcrev_t585_lb180_r0.0005",
+                    dom,
+                    d_px,
+                    "92%",
+                    "+$0.40",
+                    f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
+                )
+
+        # 53. btcsqz_t720_lb45_r0.0012_l0.3
+        if 718 <= elapsed <= 725 and lead >= 0.30:
+            btc_rng45 = self._btc_range(elapsed, 45)
+            if btc_rng45 is not None and btc_rng45 <= 0.0012:
+                self._fire(
+                    "btcsqz_t720_lb45_r0.0012_l0.3",
+                    dom,
+                    d_px,
+                    "96%",
+                    "+$0.25",
+                    f"lead={lead:.3f} btc_rng45={btc_rng45:.4%}",
+                )
+
+        # 54. btcsqz_t720_lb75_r0.0016_l0.2
+        if 718 <= elapsed <= 725 and lead >= 0.20:
+            btc_rng75 = self._btc_range(elapsed, 75)
+            if btc_rng75 is not None and btc_rng75 <= 0.0016:
+                self._fire(
+                    "btcsqz_t720_lb75_r0.0016_l0.2",
+                    dom,
+                    d_px,
+                    "94%",
+                    "+$0.24",
+                    f"lead={lead:.3f} btc_rng75={btc_rng75:.4%}",
+                )

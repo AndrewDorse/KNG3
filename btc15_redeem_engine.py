@@ -22,6 +22,7 @@ from config import (
     append_window_balance_snapshot,
     setup_file_logger,
 )
+from btc_price_feed import BtcPricePoint, RealtimeBtcPriceFeed
 from market_locator import GammaMarketLocator
 from trader import PolymarketTrader
 
@@ -81,6 +82,7 @@ LATE_TREND_HEDGE_MAX_PRICE = 0.28
 LATE_TREND_TARGET_SHARE = 0.66
 LATE_TREND_MIN_WIN_PNL = 1.5
 PRICE_HISTORY_RETENTION_SECONDS = 120
+BTC_PRICE_HISTORY_RETENTION_SECONDS = 960
 TP_PRICE = 0.97
 EARLY_EXIT_WIN_PRICE = 0.99
 EARLY_EXIT_LOSE_PRICE = 0.01
@@ -247,6 +249,11 @@ class Btc15RedeemEngine:
         self._last_down_price: float | None = None
         self._last_price_time: float = 0.0
         self._price_history: list[PricePoint] = []
+        self._btc_feed = RealtimeBtcPriceFeed(config) if config.btc_feed_enabled else None
+        self._last_btc_price: float | None = None
+        self._last_btc_price_time: float = 0.0
+        self._btc_price_history: list[BtcPricePoint] = []
+        self._last_btc_feed_error_log: float = 0.0
 
         self._order_map: dict[str, ManagedOrder] = {}
         self._orders_placed = 0
@@ -352,6 +359,12 @@ class Btc15RedeemEngine:
             self.config.strategy_stale_order_seconds,
             self.config.strategy_max_live_orders,
         )
+        LOGGER.info(
+            "BTC feed plan | enabled=%s | symbol=%s | poll=%.1fs",
+            self._btc_feed is not None,
+            self.config.btc_feed_symbol,
+            self.config.btc_feed_poll_seconds,
+        )
 
         if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
             LOGGER.warning(
@@ -425,6 +438,7 @@ class Btc15RedeemEngine:
 
         open_orders = self._get_contract_orders(contract)
         live_ids = self._extract_live_ids(open_orders)
+        self._poll_btc_price()
         self._poll_prices(contract)
         self._detect_fills(contract, live_ids)
         self._cancel_stale_orders(contract, seconds_remaining)
@@ -542,6 +556,9 @@ class Btc15RedeemEngine:
         self._last_down_price = None
         self._last_price_time = 0.0
         self._price_history.clear()
+        self._last_btc_price = None
+        self._last_btc_price_time = 0.0
+        self._btc_price_history.clear()
 
         self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
         self._baseline_down_balance = self.trader.token_balance(contract.down.token_id)
@@ -777,6 +794,25 @@ class Btc15RedeemEngine:
         )
         cutoff = self._last_price_time - PRICE_HISTORY_RETENTION_SECONDS
         self._price_history = [p for p in self._price_history if p.ts >= cutoff]
+
+    def _poll_btc_price(self) -> None:
+        if self._btc_feed is None:
+            return
+        try:
+            price = self._btc_feed.poll()
+        except Exception as exc:
+            now = time.time()
+            if now - self._last_btc_feed_error_log >= 30.0:
+                LOGGER.warning("[BTC FEED] poll failed, classic signals remain active: %s", exc)
+                self._last_btc_feed_error_log = now
+            return
+
+        now = time.time()
+        self._last_btc_price = price
+        self._last_btc_price_time = now
+        self._btc_price_history.append(BtcPricePoint(ts=now, price=price))
+        cutoff = now - BTC_PRICE_HISTORY_RETENTION_SECONDS
+        self._btc_price_history = [p for p in self._btc_price_history if p.ts >= cutoff]
 
     def _maybe_retry_window_balance(
         self,

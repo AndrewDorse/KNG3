@@ -74,6 +74,9 @@ class BotConfig:
     strategy_late_stop_worst_case_usdc: float = 1.5
     strategy_balance_retry_seconds: int = 10
     strategy_balance_retry_attempts: int = 3
+    btc_feed_enabled: bool = True
+    btc_feed_poll_seconds: float = 1.0
+    btc_feed_symbol: str = "BTCUSDT"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only
     strategy_mode: str = "signal_only"
 
@@ -160,6 +163,9 @@ class BotConfig:
             strategy_late_stop_worst_case_usdc=_env_float("BOT_STRATEGY_LATE_STOP_WORST_CASE_USDC", 1.5),
             strategy_balance_retry_seconds=_env_int("BOT_STRATEGY_BALANCE_RETRY_SECONDS", 10),
             strategy_balance_retry_attempts=_env_int("BOT_STRATEGY_BALANCE_RETRY_ATTEMPTS", 3),
+            btc_feed_enabled=_env_bool("BOT_BTC_FEED_ENABLED", True),
+            btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
+            btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             strategy_mode=os.getenv("BOT_STRATEGY_MODE", "signal_only").strip().lower(),
         )
 
