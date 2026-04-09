@@ -45,17 +45,19 @@ CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
     "rdiv_t600_w180_r0.08_f0.01": ("range_le_120_0.0016",),
     "vshape_t600_lb240_b0.08": ("range_le_120_0.0016",),
     "diverge_t345_w60_r005": ("range_le_30_0.0004",),
-    "reversal_300_to_600": ("range_le_120_0.002",),
+    "reversal_300_to_600": ("range_le_120_0.0012",),
     "dom_t720_lead30": ("range_le_45_0.0012",),
     "spread_t720_ge06": ("range_le_45_0.0012",),
     "spread_squeeze_t720_drop20": ("range_le_45_0.0012",),
+    "crossover_t585_k45": ("moveabs_ge_90_0.0002",),
+    "crossover_t585_k60": ("moveabs_ge_90_0.0002",),
     "crossover_t600_k60": ("range_le_90_0.0016",),
     "ratio_t720_ge4": ("range_le_45_0.0012",),
     "rddrecov_t360_dd0.2_r0.75": ("range_le_30_0.001",),
     "accum_t615_b20_n3": ("range_le_75_0.0016", "rebound_ge_120_0.0004"),
     "rddrecov_t360_dd0.15_r0.75": ("range_le_30_0.001",),
     "low_vol_t720_flip2": ("range_le_45_0.0008",),
-    "loserfloor_t495": ("range_le_15_0.0012",),
+    "loserfloor_t495": ("range_le_15_0.0012", "range_le_30_0.0012"),
     "lbounce_t240_r60_f15_rm005_fm006": ("range_le_30_0.0008", "rebound_ge_180_0.0004"),
     "crossover_t600_k30": ("range_le_60_0.0008",),
     "flipband_t720_0to1": ("range_le_45_0.0008",),
@@ -63,20 +65,45 @@ CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
     "low_vol_t600_flip2": ("range_le_45_0.0005",),
     "vel_t693_w60_v004": ("range_le_60_0.0016",),
     "vel_t645_w90_v003": ("range_le_60_0.0012", "rebound_ge_120_0.0004"),
+    "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004",),
+    "loserdrop_t585_w45_v002": ("range_le_60_0.0016",),
+    "lbounce_t585_r30_f30_rm003_fm006": ("moveabs_ge_90_0.0002",),
 }
 
 # Pattern-specific risk blockers derived from late-reversal stress tests.
 # If a blocker condition is met, the signal is skipped. BTC-based blockers are
 # ignored when BTC data is unavailable so classic fallback behavior still works.
 PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
-    "dom_t720_lead30": ("elapsed_ge_720",),
-    "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720",),
-    "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720",),
+    "dom_t720_lead30": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
+    "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
+    "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
+    "vel_t315_w30_v004": ("flips_ge_5",),
     "vshape_t600_lb240_b0.12": ("elapsed_ge_600",),
-    "vshape_t600_lb240_b0.08": ("ratio_ge_5.0",),
-    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008",),
+    "vshape_t600_lb240_b0.08": ("ratio_ge_5.0", "elapsed_ge_600"),
+    "vshape_t510_lb120_b0.08_c0.85": ("loser_lt_0.15",),
+    "vshape_t600_lb240_b0.12_btcm240dn0002": ("btc_range_ge_90_0.0008",),
+    "vshape_t585_lb240_b0.15_c0.95": ("btc_range_ge_90_0.0008",),
+    "mix_vshape_t585_lb240_b0.12_br120_0.0016": ("btc_range_ge_90_0.0008",),
+    "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750",),
+    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001",),
     "twapgap_t585_lb300_g005": ("btc_range_ge_120_0.0016",),
-    "btcsqz_t690_lb30_r0.0006_l0.12": ("price_ge_0.8",),
+    "btcrev_t585_lb180_r0.0005": ("btc_range_ge_120_0.0016",),
+    "btcsqz_t690_lb30_r0.0006_l0.12": ("price_ge_0.75",),
+    "crossover_t600_k60": ("elapsed_ge_600",),
+    "crossover_t600_k30": ("elapsed_ge_600",),
+    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360",),
+    "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360",),
+    "ddrecov_t615_dd01_r075": ("price_ge_0.75",),
+    "nearpeak_t645_g001": ("btc_range_ge_60_0.0006",),
+    "loserdrop_t840_w60_v0.0015": ("price_ge_0.8",),
+    "ratio_t720_ge4": ("elapsed_ge_720",),
+    "spread_t720_ge06": ("elapsed_ge_720",),
+    "low_vol_t600_flip2": ("btc_range_ge_60_0.0008",),
+    "low_vol_t720_flip2": ("btc_range_ge_30_0.0004",),
+    "btcbreak_t600_sq30_mv45_r0.0006_m0.0004": ("elapsed_ge_600",),
+    "vel_t693_w60_v004": ("loser_lt_0.12",),
+    "diverge_t345_w60_r005": ("ratio_ge_5.0",),
+    "retrace_t585_r085": ("loser_lt_0.1",),
 }
 
 
@@ -436,6 +463,9 @@ class SignalAnalyzer:
         if kind == "move_dn":
             value = self._btc_move(elapsed, lookback)
             return value is not None and value <= -threshold
+        if kind == "moveabs_ge":
+            value = self._btc_move(elapsed, lookback)
+            return value is not None and abs(value) >= threshold
         if kind == "accel_ge":
             value = self._btc_accel(elapsed, lookback)
             return value is not None and value >= threshold
@@ -474,9 +504,22 @@ class SignalAnalyzer:
                 if ratio >= float(parts[2]):
                     return True
                 continue
+            if len(parts) == 3 and parts[0] == "flips" and parts[1] == "ge":
+                if self._dom_flips >= int(float(parts[2])):
+                    return True
+                continue
+            if len(parts) == 3 and parts[0] == "loser" and parts[1] == "lt":
+                if l_px < float(parts[2]):
+                    return True
+                continue
             if len(parts) == 5 and parts[0] == "btc" and parts[1] == "range" and parts[2] == "ge":
                 btc_range = self._btc_range(elapsed, float(parts[3]))
                 if btc_range is not None and btc_range >= float(parts[4]):
+                    return True
+                continue
+            if len(parts) == 6 and parts[0] == "btc" and parts[1] == "move" and parts[2] == "abs" and parts[3] == "lt":
+                btc_move = self._btc_move(elapsed, float(parts[4]))
+                if btc_move is not None and abs(btc_move) < float(parts[5]):
                     return True
                 continue
         return False
