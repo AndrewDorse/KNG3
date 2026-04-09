@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """BTC 15-minute single-window redeem-hold strategy."""
 
 from __future__ import annotations
@@ -90,6 +90,10 @@ HEDGE_SALVAGE_MIN_PRICE = 0.03
 HEDGE_SALVAGE_BUFFER = 0.02
 MIN_MARKETABLE_BUY_NOTIONAL = 1.00
 TOKEN_SHARE_RAW_UNIT = 1_000_000
+LEFTOVER_CLEANUP_PRICE = 0.98
+LEFTOVER_CLEANUP_BALANCE_MAX = 5.0
+LEFTOVER_CLEANUP_START_SECONDS_REMAINING = 300.0
+LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
 # "current" phase ramp (same as run_named_profiles strategy_0 / price-history replay).
 PHASE_SPEND_CAPS = (
     (60, 0.05),
@@ -243,6 +247,7 @@ class Btc15RedeemEngine:
         self._exit_mode_winner_side: str | None = None
         self._exit_orders_by_side: dict[str, ManagedExitOrder] = {}
         self._fully_exited_sides: set[str] = set()
+        self._last_leftover_cleanup_ts: dict[str, float] = {"UP": 0.0, "DOWN": 0.0}
 
         self._last_contract: ActiveContract | None = None
         self._last_up_price: float | None = None
@@ -292,7 +297,7 @@ class Btc15RedeemEngine:
                 self._mimic_params = loaded
             else:
                 LOGGER.error(
-                    "strategy_mode=mimic_lot but could not load params from %s â€” falling back to aa1",
+                    "strategy_mode=mimic_lot but could not load params from %s — falling back to aa1",
                     MIMIC_PARAMS_JSON,
                 )
 
@@ -337,9 +342,8 @@ class Btc15RedeemEngine:
         self._window_budget_usdc = self._effective_budget(self._session_balance_usdc)
 
         LOGGER.info(
-            "BTC 15m redeem engine | profile=%s | version=%s | mode=%s | dry_run=%s | market=%s | continuous=%s",
+            "BTC 15m redeem engine | profile=%s | mode=%s | dry_run=%s | market=%s | continuous=%s",
             self._profile_label(),
-            self.config.bot_version,
             self.config.strategy_mode,
             self.config.dry_run,
             self.config.market_slug_prefix,
@@ -449,6 +453,7 @@ class Btc15RedeemEngine:
         self._maybe_enter_early_exit_mode(contract)
         if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only():
             self._manage_exit_orders(contract, open_orders)
+            self._cleanup_small_leftovers(contract, seconds_remaining, time.time())
 
         if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only() and seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
             self._run_take_profit_phase(contract)
@@ -537,6 +542,7 @@ class Btc15RedeemEngine:
         self._exit_mode_winner_side = None
         self._exit_orders_by_side.clear()
         self._fully_exited_sides.clear()
+        self._last_leftover_cleanup_ts = {"UP": 0.0, "DOWN": 0.0}
         self._no_signal_reason = ""
         self._balance_retry_attempts_remaining = 0
         self._next_balance_retry_ts = 0.0
@@ -658,10 +664,8 @@ class Btc15RedeemEngine:
             )
         elif self._strategy_mode_signal_only():
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | version=%s | signal_only mode - orders via signal_analyzer thread",
-                contract.slug,
-                self._profile_label(),
-                self.config.bot_version,
+                "[STRATEGY PARAMS] %s | profile=%s | signal_only mode — orders via signal_analyzer thread",
+                contract.slug, self._profile_label(),
             )
         elif self._strategy_mode_strategy_0():
             LOGGER.info(
@@ -990,6 +994,45 @@ class Btc15RedeemEngine:
             if self._exit_mode_winner_side in self._fully_exited_sides:
                 salvage_price = self._salvage_price_for(loser_side)
                 self._ensure_exit_sell(contract, loser_side, salvage_price, purpose="salvage")
+
+    def _cleanup_small_leftovers(self, contract: ActiveContract, seconds_remaining: float, now: float) -> None:
+        if seconds_remaining > LEFTOVER_CLEANUP_START_SECONDS_REMAINING:
+            return
+
+        for side_label, token, current_price in (
+            ("UP", contract.up, self._last_up_price),
+            ("DOWN", contract.down, self._last_down_price),
+        ):
+            if current_price is None or current_price < LEFTOVER_CLEANUP_PRICE:
+                continue
+            if now - self._last_leftover_cleanup_ts[side_label] < LEFTOVER_CLEANUP_INTERVAL_SECONDS:
+                continue
+            if side_label in self._exit_orders_by_side:
+                continue
+            balance = self.trader.token_balance(token.token_id)
+            if balance <= 0.0 or balance >= LEFTOVER_CLEANUP_BALANCE_MAX:
+                continue
+            self._last_leftover_cleanup_ts[side_label] = now
+            try:
+                resp = self.trader.place_marketable_sell(token, LEFTOVER_CLEANUP_PRICE, round(balance, 4))
+                order_id = str(resp.get("orderID") or resp.get("id") or "")
+                LOGGER.info(
+                    "[LEFTOVER CLEANUP] %s | side=%s | price=$%.2f | shares=%.4f | order=%s",
+                    contract.slug,
+                    side_label,
+                    LEFTOVER_CLEANUP_PRICE,
+                    balance,
+                    order_id[:16] if order_id else "n/a",
+                )
+            except Exception as exc:
+                LOGGER.debug(
+                    "[LEFTOVER CLEANUP FAILED] %s | side=%s | price=$%.2f | shares=%.4f | %s",
+                    contract.slug,
+                    side_label,
+                    LEFTOVER_CLEANUP_PRICE,
+                    balance,
+                    exc,
+                )
 
     def _refresh_exit_orders(self, contract: ActiveContract, open_ids: set[str]) -> None:
         for side_label, managed in list(self._exit_orders_by_side.items()):
@@ -1568,7 +1611,7 @@ class Btc15RedeemEngine:
         pu, pd = snapshot.up_pnl_if_win, snapshot.down_pnl_if_win
         if pu > BOX_BOTH_WAYS_MIN_PNL_USDC and pd > BOX_BOTH_WAYS_MIN_PNL_USDC:
             self._no_signal_reason = (
-                f"box: both outcomes profitable (if_UP=${pu:.2f} if_DOWN=${pd:.2f}) â€” stop new risk"
+                f"box: both outcomes profitable (if_UP=${pu:.2f} if_DOWN=${pd:.2f}) — stop new risk"
             )
             return None
 
@@ -2162,4 +2205,3 @@ class Btc15RedeemEngine:
         seconds_remaining: float,
     ) -> None:
         return
-

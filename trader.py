@@ -179,6 +179,23 @@ class PolymarketTrader:
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.GTC)
 
+    @_retry()
+    def place_marketable_sell(
+        self, token: TokenMarket, price: float, size: float
+    ) -> dict[str, Any]:
+        """Place an aggressive sell intended to fill immediately.
+
+        Uses FAK so small cleanup leftovers do not remain resting on the book.
+        """
+        order = OrderArgs(
+            token_id=token.token_id,
+            price=round(price, 2),
+            size=float(size),
+            side=SELL,
+        )
+        signed = self.client.create_order(order)
+        return self.client.post_order(signed, OrderType.FAK)
+
     # ------------------------------------------------------------------
     # Order management
     # ------------------------------------------------------------------

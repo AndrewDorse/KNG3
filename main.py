@@ -24,7 +24,6 @@ def main() -> int:
     LOGGER.info("=" * 60)
     LOGGER.info("BTC 15-MIN CONTINUOUS BOT")
     LOGGER.info("=" * 60)
-    LOGGER.info("version      = %s", config.bot_version)
     LOGGER.info("dry_run      = %s", config.dry_run)
     LOGGER.info("strategy_mode= %s", config.strategy_mode)
     LOGGER.info("market       = %s", config.market_slug_prefix)
