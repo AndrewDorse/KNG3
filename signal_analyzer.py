@@ -36,6 +36,7 @@ BTC_LAYER_PATTERN_COUNT = 10
 LEFTOVER_CLEANUP_PRICE = 0.98
 LEFTOVER_CLEANUP_START_ELAPSED = 600.0
 LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
+SIGNAL_WINDOW_CLOSE_PRICE = 0.98
 
 # Best blended set from BTC overlay search.
 # If BTC data is available, these classic signals require the listed BTC confirmation
@@ -138,6 +139,7 @@ class SignalAnalyzer:
         self._pending_tp: list[tuple[str, int]] = []
         self._orders_placed: int = 0
         self._last_leftover_cleanup_ts: float = 0.0
+        self._signal_window_closed: bool = False
 
     def attach(self, engine) -> None:
         self._engine = engine
@@ -198,6 +200,8 @@ class SignalAnalyzer:
         if self._live:
             self._check_pending_tp()
             self._cleanup_small_leftovers(elapsed, now)
+        if max(up, down) >= SIGNAL_WINDOW_CLOSE_PRICE:
+            self._signal_window_closed = True
         self._eval_patterns(snap, elapsed, cur_dom)
 
     def _reset_window(self, slug: str, start_ts: float) -> None:
@@ -213,6 +217,7 @@ class SignalAnalyzer:
         self._pending_tp.clear()
         self._orders_placed = 0
         self._last_leftover_cleanup_ts = 0.0
+        self._signal_window_closed = False
         SIGLOG.info("[SIGNAL] new window %s", slug)
 
     # ------------------------------------------------------------------
@@ -315,6 +320,8 @@ class SignalAnalyzer:
     # Signal fire (with live order)
     # ------------------------------------------------------------------
     def _fire(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> None:
+        if self._signal_window_closed:
+            return
         if not self._btc_overlay_allows(name, side):
             return
         if self._entry_risk_blocked(name, side, price):
