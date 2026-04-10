@@ -257,6 +257,9 @@ class Btc15RedeemEngine:
         self._btc_feed = RealtimeBtcPriceFeed(config) if config.btc_feed_enabled else None
         self._last_btc_price: float | None = None
         self._last_btc_price_time: float = 0.0
+        self._last_btc_base_volume: float | None = None
+        self._last_btc_quote_volume: float | None = None
+        self._last_btc_trade_count: int = 0
         self._btc_price_history: list[BtcPricePoint] = []
         self._last_btc_feed_error_log: float = 0.0
 
@@ -566,6 +569,9 @@ class Btc15RedeemEngine:
         self._price_history.clear()
         self._last_btc_price = None
         self._last_btc_price_time = 0.0
+        self._last_btc_base_volume = None
+        self._last_btc_quote_volume = None
+        self._last_btc_trade_count = 0
         self._btc_price_history.clear()
 
         self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
@@ -813,7 +819,7 @@ class Btc15RedeemEngine:
         if self._btc_feed is None:
             return
         try:
-            price = self._btc_feed.poll()
+            point = self._btc_feed.poll()
         except Exception as exc:
             now = time.time()
             if now - self._last_btc_feed_error_log >= 30.0:
@@ -822,9 +828,20 @@ class Btc15RedeemEngine:
             return
 
         now = time.time()
-        self._last_btc_price = price
+        self._last_btc_price = point.price
         self._last_btc_price_time = now
-        self._btc_price_history.append(BtcPricePoint(ts=now, price=price))
+        self._last_btc_base_volume = point.base_volume
+        self._last_btc_quote_volume = point.quote_volume
+        self._last_btc_trade_count = point.trade_count
+        self._btc_price_history.append(
+            BtcPricePoint(
+                ts=now,
+                price=point.price,
+                base_volume=point.base_volume,
+                quote_volume=point.quote_volume,
+                trade_count=point.trade_count,
+            )
+        )
         cutoff = now - BTC_PRICE_HISTORY_RETENTION_SECONDS
         self._btc_price_history = [p for p in self._btc_price_history if p.ts >= cutoff]
 

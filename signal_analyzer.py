@@ -42,6 +42,7 @@ SIGNAL_WINDOW_CLOSE_PRICE = 0.98
 # If BTC data is available, these classic signals require the listed BTC confirmation
 # filters before firing. If BTC is unavailable, the classic signal still fires.
 CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
+    "vshape_t330_lb120_b0.08_c0.85": ("moveabs_le_30_0.0002317888",),
     "vshape_t600_lb240_b0.12": ("range_le_120_0.0016",),
     "rdiv_t600_w180_r0.08_f0.01": ("range_le_120_0.0016",),
     "vshape_t600_lb240_b0.08": ("range_le_120_0.0016",),
@@ -55,8 +56,8 @@ CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
     "crossover_t600_k60": ("range_le_90_0.0016",),
     "ratio_t720_ge4": ("range_le_45_0.0012",),
     "rddrecov_t360_dd0.2_r0.75": ("range_le_30_0.001",),
+    "rddrecov_t360_dd0.15_r0.75": ("base_ratio_ge_5_30_0.2352320764",),
     "accum_t615_b20_n3": ("range_le_75_0.0016", "rebound_ge_120_0.0004"),
-    "rddrecov_t360_dd0.15_r0.75": ("range_le_30_0.001",),
     "low_vol_t720_flip2": ("range_le_45_0.0008",),
     "loserfloor_t495": ("range_le_15_0.0012", "range_le_30_0.0012"),
     "lbounce_t240_r60_f15_rm005_fm006": ("range_le_30_0.0008", "rebound_ge_180_0.0004"),
@@ -81,30 +82,36 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "vel_t315_w30_v004": ("flips_ge_5",),
     "vshape_t600_lb240_b0.12": ("elapsed_ge_600",),
     "vshape_t600_lb240_b0.08": ("ratio_ge_5.0", "elapsed_ge_600"),
-    "vshape_t510_lb120_b0.08_c0.85": ("loser_lt_0.15",),
-    "vshape_t600_lb240_b0.12_btcm240dn0002": ("btc_range_ge_90_0.0008",),
-    "vshape_t585_lb240_b0.15_c0.95": ("btc_range_ge_90_0.0008",),
+    "vshape_t600_lb240_b0.12_btcm240dn0002": ("btc_range_ge_90_0.0008", "sidemove30_lt_-0.0571428571"),
+    "vshape_t585_lb240_b0.15_c0.95": ("btc_range_ge_90_0.0008", "losermove30_gt_-0.1176470588", "sidemove30_lt_0.0819672131"),
     "mix_vshape_t585_lb240_b0.12_br120_0.0016": ("btc_range_ge_90_0.0008",),
-    "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750",),
+    "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750", "base1_lt_0.00026"),
     "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001",),
-    "twapgap_t585_lb300_g005": ("btc_range_ge_120_0.0016",),
-    "btcrev_t585_lb180_r0.0005": ("btc_range_ge_120_0.0016",),
+    "twapgap_t585_lb300_g005": ("btc_range_ge_120_0.0016", "quote5_lt_13236.7510394007"),
+    "btcrev_t585_lb180_r0.0005": ("btc_range_ge_120_0.0016", "trades15_lt_498"),
     "btcsqz_t690_lb30_r0.0006_l0.12": ("price_ge_0.75",),
-    "crossover_t600_k60": ("elapsed_ge_600",),
-    "crossover_t600_k30": ("elapsed_ge_600",),
-    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360",),
+    "crossover_t600_k60": ("elapsed_ge_600", "losermove60_lt_-0.328358209"),
+    "crossover_t600_k30": ("elapsed_ge_599",),
+    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71"),
     "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360",),
     "ddrecov_t615_dd01_r075": ("price_ge_0.75",),
     "nearpeak_t645_g001": ("btc_range_ge_60_0.0006",),
-    "loserdrop_t840_w60_v0.0015": ("price_ge_0.8",),
+    "loserdrop_t840_w60_v0.0015": ("price_ge_0.8", "base1_lt_0.00109"),
     "ratio_t720_ge4": ("elapsed_ge_720",),
     "spread_t720_ge06": ("elapsed_ge_720",),
-    "low_vol_t600_flip2": ("btc_range_ge_60_0.0008",),
+    "low_vol_t600_flip2": ("btc_range_ge_60_0.0008", "trades1_gt_3"),
     "low_vol_t720_flip2": ("btc_range_ge_30_0.0004",),
     "btcbreak_t600_sq30_mv45_r0.0006_m0.0004": ("elapsed_ge_600",),
-    "vel_t693_w60_v004": ("loser_lt_0.12",),
+    "vel_t693_w60_v004": ("loser_lt_0.12", "base15_gt_1.03821"),
     "diverge_t345_w60_r005": ("ratio_ge_5.0",),
     "retrace_t585_r085": ("loser_lt_0.1",),
+    "loserfloor_t495": ("btcrebound120_lt_0.0008100599",),
+    "lbounce_t240_r60_f15_rm005_fm006": ("btcrange60_gt_0.0009086287",),
+    "lbounce_t585_r30_f30_rm003_fm006": ("btcmoveabs60_gt_0.0005183479",),
+    "loserdrop_t585_w45_v002": ("flips_lt_6", "base5_lt_0.24631"),
+    "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04",),
+    "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04",),
+    "vel_t645_w90_v003": ("base5_lt_0.07386",),
 }
 
 
@@ -395,6 +402,115 @@ class SignalAnalyzer:
             return None
         return float(best.price)
 
+    def _btc_volume_sum(self, end_elapsed: float, lookback_seconds: float, field: str) -> float | None:
+        eng = self._engine
+        if eng is None:
+            return None
+        history = getattr(eng, "_btc_price_history", None)
+        if not history:
+            return None
+        start_ts = self._window_start_ts + max(0.0, end_elapsed - lookback_seconds)
+        end_ts = self._window_start_ts + max(0.0, end_elapsed)
+        total = 0.0
+        found = False
+        for point in history:
+            if point.ts < start_ts or point.ts > end_ts:
+                continue
+            value = getattr(point, field, None)
+            if value is None:
+                continue
+            total += float(value)
+            found = True
+        return total if found else None
+
+    def _btc_base_ratio(self, end_elapsed: float, short_lookback: float, long_lookback: float) -> float | None:
+        short_sum = self._btc_volume_sum(end_elapsed, short_lookback, "base_volume")
+        long_sum = self._btc_volume_sum(end_elapsed, long_lookback, "base_volume")
+        if short_sum is None or long_sum is None or long_lookback <= 0 or short_lookback <= 0:
+            return None
+        baseline = long_sum * (short_lookback / long_lookback)
+        if baseline <= 0:
+            return None
+        return short_sum / baseline
+
+    def _btc_quote_ratio(self, end_elapsed: float, short_lookback: float, long_lookback: float) -> float | None:
+        short_sum = self._btc_volume_sum(end_elapsed, short_lookback, "quote_volume")
+        long_sum = self._btc_volume_sum(end_elapsed, long_lookback, "quote_volume")
+        if short_sum is None or long_sum is None or long_lookback <= 0 or short_lookback <= 0:
+            return None
+        baseline = long_sum * (short_lookback / long_lookback)
+        if baseline <= 0:
+            return None
+        return short_sum / baseline
+
+    def _btc_trade_ratio(self, end_elapsed: float, short_lookback: float, long_lookback: float) -> float | None:
+        short_sum = self._btc_volume_sum(end_elapsed, short_lookback, "trade_count")
+        long_sum = self._btc_volume_sum(end_elapsed, long_lookback, "trade_count")
+        if short_sum is None or long_sum is None or long_lookback <= 0 or short_lookback <= 0:
+            return None
+        baseline = long_sum * (short_lookback / long_lookback)
+        if baseline <= 0:
+            return None
+        return short_sum / baseline
+
+    def _signal_metric_value(self, metric: str, side: str, elapsed: float, snap: _PriceSnap) -> float | None:
+        if metric == "elapsed":
+            return float(elapsed)
+        if metric == "price" or metric == "domprice":
+            return float(self._dom_price(snap))
+        if metric == "loser" or metric == "loserprice":
+            return float(self._loser_price(snap))
+        if metric == "lead":
+            return float(self._dom_price(snap) - self._loser_price(snap))
+        if metric == "ratio":
+            loser = self._loser_price(snap)
+            return float(self._dom_price(snap) / loser) if loser > 0.01 else 999.0
+        if metric == "flips":
+            return float(self._dom_flips)
+        if metric.startswith("sidemove"):
+            lookback = float(metric.removeprefix("sidemove"))
+            old = self._snap_near(max(0.0, elapsed - lookback), tolerance=max(5.0, lookback * 0.35))
+            if old is None:
+                return None
+            old_px = self._side_price(old, side)
+            cur_px = self._side_price(snap, side)
+            return ((cur_px - old_px) / old_px) if old_px > 0 else None
+        if metric.startswith("losermove"):
+            lookback = float(metric.removeprefix("losermove"))
+            loser_side = "Down" if side == "Up" else "Up"
+            old = self._snap_near(max(0.0, elapsed - lookback), tolerance=max(5.0, lookback * 0.35))
+            if old is None:
+                return None
+            old_px = self._side_price(old, loser_side)
+            cur_px = self._side_price(snap, loser_side)
+            return ((cur_px - old_px) / old_px) if old_px > 0 else None
+        if metric.startswith("base") and metric[4:].isdigit():
+            return self._btc_volume_sum(elapsed, float(metric[4:]), "base_volume")
+        if metric.startswith("quote") and metric[5:].isdigit():
+            return self._btc_volume_sum(elapsed, float(metric[5:]), "quote_volume")
+        if metric.startswith("trades") and metric[6:].isdigit():
+            return self._btc_volume_sum(elapsed, float(metric[6:]), "trade_count")
+        if metric.startswith("btcrange") and metric[8:].isdigit():
+            return self._btc_range(elapsed, float(metric[8:]))
+        if metric.startswith("btcmoveabs") and metric[10:].isdigit():
+            value = self._btc_move(elapsed, float(metric[10:]))
+            return abs(value) if value is not None else None
+        if metric.startswith("btcrebound") and metric[10:].isdigit():
+            return self._btc_rebound(elapsed, float(metric[10:]), side)
+        if metric.startswith("baseratio") and "_" in metric:
+            raw = metric.removeprefix("baseratio")
+            short_s, long_s = raw.split("_", 1)
+            return self._btc_base_ratio(elapsed, float(short_s), float(long_s))
+        if metric.startswith("quoteratio") and "_" in metric:
+            raw = metric.removeprefix("quoteratio")
+            short_s, long_s = raw.split("_", 1)
+            return self._btc_quote_ratio(elapsed, float(short_s), float(long_s))
+        if metric.startswith("tradesratio") and "_" in metric:
+            raw = metric.removeprefix("tradesratio")
+            short_s, long_s = raw.split("_", 1)
+            return self._btc_trade_ratio(elapsed, float(short_s), float(long_s))
+        return None
+
     def _btc_move(self, end_elapsed: float, lookback_seconds: float) -> float | None:
         end_elapsed = max(0.0, end_elapsed)
         now_px = self._btc_price_near(end_elapsed)
@@ -473,8 +589,19 @@ class SignalAnalyzer:
         if kind == "moveabs_ge":
             value = self._btc_move(elapsed, lookback)
             return value is not None and abs(value) >= threshold
+        if kind == "moveabs_le":
+            value = self._btc_move(elapsed, lookback)
+            return value is not None and abs(value) <= threshold
         if kind == "accel_ge":
             value = self._btc_accel(elapsed, lookback)
+            return value is not None and value >= threshold
+        if kind.startswith("base_ratio_ge_"):
+            short_raw = kind.removeprefix("base_ratio_ge_")
+            if not short_raw:
+                return True
+            short_lookback = float(short_raw)
+            long_lookback = lookback
+            value = self._btc_base_ratio(elapsed, short_lookback, long_lookback)
             return value is not None and value >= threshold
         return True
 
@@ -499,6 +626,22 @@ class SignalAnalyzer:
         elapsed = snap.elapsed
         for spec in specs:
             parts = spec.split("_")
+            if len(parts) >= 3 and parts[-2] in {"ge", "gt", "le", "lt"}:
+                metric = "".join(parts[:-2])
+                cmp = parts[-2]
+                threshold = float(parts[-1])
+                value = self._signal_metric_value(metric, side, elapsed, snap)
+                if value is None:
+                    continue
+                if cmp == "ge" and value >= threshold:
+                    return True
+                if cmp == "gt" and value > threshold:
+                    return True
+                if cmp == "le" and value <= threshold:
+                    return True
+                if cmp == "lt" and value < threshold:
+                    return True
+                continue
             if len(parts) == 3 and parts[0] == "elapsed" and parts[1] == "ge":
                 if elapsed >= float(parts[2]):
                     return True
@@ -923,22 +1066,7 @@ class SignalAnalyzer:
                                f"v_bounce={px_now - px_min:.3f}")
                     break
 
-        # 49. vshape_t510_lb120_b0.08_c0.85
-        if 508 <= elapsed <= 515:
-            for side in ("Up", "Down"):
-                start = 390
-                mid = 450
-                segment = [self._side_price(s, side) for s in self._history if start <= s.elapsed <= mid]
-                if not segment:
-                    continue
-                px_min = min(segment)
-                px_now = self._side_price(snap, side)
-                if px_now <= 0.85 and px_now - px_min >= 0.08:
-                    self._fire("vshape_t510_lb120_b0.08_c0.85", side, px_now, "65%", "+$0.55",
-                               f"v_bounce={px_now - px_min:.3f}")
-                    break
-
-        # 50. vshape_t585_lb240_b0.15_c0.95
+        # 49. vshape_t585_lb240_b0.15_c0.95
         if 583 <= elapsed <= 590:
             for side in ("Up", "Down"):
                 start = 345
