@@ -10,8 +10,8 @@ after each fill to free cash.
 Set BOT_STRATEGY_MODE=signal_only to let this module handle all orders
 while the engine still polls prices, heartbeats, and detects fills.
 
-46 active patterns.
-v2(4) + v3(7) + v4(8) + v5(4) + v6(6) + v7(17).
+14 active patterns.
+Pruned live set to 90%+ WR signals on the latest full public replay.
 
 All prob/EV values below are ACTUAL TESTED (not claimed).
 EV = average net profit per fire (5 shares).
@@ -37,6 +37,25 @@ LEFTOVER_CLEANUP_PRICE = 0.98
 LEFTOVER_CLEANUP_START_ELAPSED = 600.0
 LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
 SIGNAL_WINDOW_CLOSE_PRICE = 0.98
+EARLY_WINDOW_SKIP_CHECK_ELAPSED = 120.0
+EARLY_WINDOW_SKIP_PM_RANGE = 0.60
+
+ACTIVE_SIGNAL_NAMES: set[str] = {
+    "accum_t615_b20_n3",
+    "btcagree_t525_lb180_m0.001",
+    "btcagree_t525_lb180_m0.001_l0.05",
+    "btcsqz_t645_lb90_r0.0006_l0.18",
+    "btcsqz_t645_lb90_r0.0006_l0.4",
+    "btcsqz_t525_lb90_r0.0006_l0.4",
+    "flipband_t720_0to1",
+    "lbounce_t585_r30_f30_rm003_fm006",
+    "nearpeak_t645_g001",
+    "ratio_t720_ge4",
+    "rddrecov_t360_dd0.15_r0.75",
+    "rddrecov_t360_dd0.2_r0.75",
+    "spread_squeeze_t720_drop20",
+    "spread_t720_ge06",
+}
 
 # Best blended set from BTC overlay search.
 # If BTC data is available, these classic signals require the listed BTC confirmation
@@ -44,15 +63,15 @@ SIGNAL_WINDOW_CLOSE_PRICE = 0.98
 CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
     "vshape_t330_lb120_b0.08_c0.85": ("moveabs_le_30_0.0002317888",),
     "vshape_t600_lb240_b0.12": ("range_le_120_0.0016",),
-    "rdiv_t600_w180_r0.08_f0.01": ("range_le_120_0.0016",),
+    "rdiv_t600_w180_r0.08_f0.01": ("range_le_120_0.0016", "range_le_30_0.0004"),
     "vshape_t600_lb240_b0.08": ("range_le_120_0.0016",),
     "diverge_t345_w60_r005": ("range_le_30_0.0004",),
     "reversal_300_to_600": ("range_le_120_0.0012",),
-    "dom_t720_lead30": ("range_le_45_0.0012",),
+    "dom_t720_lead30": ("range_le_45_0.0012", "range_le_60_0.0012"),
     "spread_t720_ge06": ("range_le_45_0.0012",),
     "spread_squeeze_t720_drop20": ("range_le_45_0.0012",),
-    "crossover_t585_k45": ("moveabs_ge_90_0.0002",),
-    "crossover_t585_k60": ("moveabs_ge_90_0.0002",),
+    "crossover_t585_k45": ("moveabs_ge_90_0.0002", "range_le_60_0.0008"),
+    "crossover_t585_k60": ("moveabs_ge_90_0.0002", "range_le_60_0.0008"),
     "crossover_t600_k60": ("range_le_90_0.0016",),
     "ratio_t720_ge4": ("range_le_45_0.0012",),
     "rddrecov_t360_dd0.2_r0.75": ("range_le_30_0.001",),
@@ -68,8 +87,10 @@ CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
     "vel_t693_w60_v004": ("range_le_60_0.0016",),
     "vel_t645_w90_v003": ("range_le_60_0.0012", "rebound_ge_120_0.0004"),
     "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004",),
-    "loserdrop_t585_w45_v002": ("range_le_60_0.0016",),
+    "loserdrop_t585_w45_v002": ("range_le_60_0.0016", "range_le_60_0.0012", "range_le_45_0.0008"),
     "lbounce_t585_r30_f30_rm003_fm006": ("moveabs_ge_90_0.0002",),
+    "vel_t315_w30_v004": ("range_le_45_0.0016",),
+    "vshape_t585_lb240_b0.15_c0.95": ("rebound_ge_120_0.0004", "rebound_ge_60_0.0002"),
 }
 
 # Pattern-specific risk blockers derived from late-reversal stress tests.
@@ -77,34 +98,35 @@ CLASSIC_BTC_CONFIRMATION_FILTERS: dict[str, tuple[str, ...]] = {
 # ignored when BTC data is unavailable so classic fallback behavior still works.
 PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "dom_t720_lead30": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
-    "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
-    "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
+    "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange60_ge_0.0012", "baseratio1_5_gt_3.0", "loser_lt_0.03"),
+    "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange45_ge_0.0008", "btcrange30_ge_0.0006", "baseratio1_5_gt_3.0"),
     "vel_t315_w30_v004": ("flips_ge_5",),
     "vshape_t600_lb240_b0.12": ("elapsed_ge_600",),
     "vshape_t600_lb240_b0.08": ("ratio_ge_5.0", "elapsed_ge_600"),
     "vshape_t600_lb240_b0.12_btcm240dn0002": ("btc_range_ge_90_0.0008", "sidemove30_lt_-0.0571428571"),
     "vshape_t585_lb240_b0.15_c0.95": ("btc_range_ge_90_0.0008", "losermove30_gt_-0.1176470588", "sidemove30_lt_0.0819672131"),
     "mix_vshape_t585_lb240_b0.12_br120_0.0016": ("btc_range_ge_90_0.0008",),
-    "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750", "base1_lt_0.00026"),
-    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001",),
+    "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750", "base1_lt_0.00026", "price_gt_0.85"),
+    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001", "btcmoveabs90_lt_0.0002", "btcmoveabs180_gt_0.0004", "tradesratio15_60_gt_3.0"),
     "twapgap_t585_lb300_g005": ("btc_range_ge_120_0.0016", "quote5_lt_13236.7510394007"),
     "btcrev_t585_lb180_r0.0005": ("btc_range_ge_120_0.0016", "trades15_lt_498"),
     "btcsqz_t690_lb30_r0.0006_l0.12": ("price_ge_0.75",),
     "crossover_t600_k60": ("elapsed_ge_600", "losermove60_lt_-0.328358209"),
     "crossover_t600_k30": ("elapsed_ge_599",),
-    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71"),
-    "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360",),
+    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71", "btcmoveabs30_gt_0.0008"),
+    "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360", "baseratio15_60_gt_2.5"),
     "ddrecov_t615_dd01_r075": ("price_ge_0.75",),
-    "nearpeak_t645_g001": ("btc_range_ge_60_0.0006",),
+    "nearpeak_t645_g001": ("btc_range_ge_60_0.0006", "btcrange120_gt_0.0006"),
     "loserdrop_t840_w60_v0.0015": ("price_ge_0.8", "base1_lt_0.00109"),
-    "ratio_t720_ge4": ("elapsed_ge_720",),
-    "spread_t720_ge06": ("elapsed_ge_720",),
+    "ratio_t720_ge4": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
+    "spread_t720_ge06": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
     "low_vol_t600_flip2": ("btc_range_ge_60_0.0008", "trades1_gt_3"),
-    "low_vol_t720_flip2": ("btc_range_ge_30_0.0004",),
+    "low_vol_t720_flip2": ("btc_range_ge_30_0.0004", "baseratio5_15_gt_1.2"),
     "btcbreak_t600_sq30_mv45_r0.0006_m0.0004": ("elapsed_ge_600",),
     "vel_t693_w60_v004": ("loser_lt_0.12", "base15_gt_1.03821"),
     "diverge_t345_w60_r005": ("ratio_ge_5.0",),
     "retrace_t585_r085": ("loser_lt_0.1",),
+    "reversal_300_to_600": ("loserdrop30_lt_0.02",),
     "loserfloor_t495": ("btcrebound120_lt_0.0008100599",),
     "lbounce_t240_r60_f15_rm005_fm006": ("btcrange60_gt_0.0009086287",),
     "lbounce_t585_r30_f30_rm003_fm006": ("btcmoveabs60_gt_0.0005183479",),
@@ -112,6 +134,9 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04",),
     "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04",),
     "vel_t645_w90_v003": ("base5_lt_0.07386",),
+    "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012"),
+    "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004", "tradesratio1_5_gt_3.0"),
+    "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004",),
 }
 
 
@@ -147,6 +172,9 @@ class SignalAnalyzer:
         self._orders_placed: int = 0
         self._last_leftover_cleanup_ts: float = 0.0
         self._signal_window_closed: bool = False
+        self._early_pm_min: float | None = None
+        self._early_pm_max: float | None = None
+        self._early_window_blocked: bool = False
 
     def attach(self, engine) -> None:
         self._engine = engine
@@ -155,7 +183,7 @@ class SignalAnalyzer:
         self._thread = threading.Thread(target=self._run, daemon=True, name="signal_analyzer")
         self._thread.start()
         mode_label = "LIVE -- orders enabled" if self._live else "log-only"
-        SIGLOG.info("[SIGNAL] analyzer thread started (%s) | 46 patterns active", mode_label)
+        SIGLOG.info("[SIGNAL] analyzer thread started (%s) | %d patterns active", mode_label, len(ACTIVE_SIGNAL_NAMES))
 
     def stop(self) -> None:
         self._stop.set()
@@ -194,6 +222,13 @@ class SignalAnalyzer:
         snap = _PriceSnap(ts=now, elapsed=elapsed, up=up, down=down)
         self._history.append(snap)
 
+        pm_min = min(up, down)
+        pm_max = max(up, down)
+        if self._early_pm_min is None or pm_min < self._early_pm_min:
+            self._early_pm_min = pm_min
+        if self._early_pm_max is None or pm_max > self._early_pm_max:
+            self._early_pm_max = pm_max
+
         cur_dom = "Up" if up >= down else "Down"
         if self._last_dom is not None and cur_dom != self._last_dom:
             self._dom_flips += 1
@@ -207,6 +242,21 @@ class SignalAnalyzer:
         if self._live:
             self._check_pending_tp()
             self._cleanup_small_leftovers(elapsed, now)
+        if (
+            not self._early_window_blocked
+            and elapsed <= EARLY_WINDOW_SKIP_CHECK_ELAPSED
+            and self._early_pm_min is not None
+            and self._early_pm_max is not None
+            and (self._early_pm_max - self._early_pm_min) >= EARLY_WINDOW_SKIP_PM_RANGE
+        ):
+            self._early_window_blocked = True
+            self._signal_window_closed = True
+            SIGLOG.info(
+                "[SIGNAL] window closed early | pm_range_0_120 >= %.2f | range=%.2f | window=%s",
+                EARLY_WINDOW_SKIP_PM_RANGE,
+                self._early_pm_max - self._early_pm_min,
+                self._window_slug,
+            )
         if max(up, down) >= SIGNAL_WINDOW_CLOSE_PRICE:
             self._signal_window_closed = True
         self._eval_patterns(snap, elapsed, cur_dom)
@@ -225,6 +275,9 @@ class SignalAnalyzer:
         self._orders_placed = 0
         self._last_leftover_cleanup_ts = 0.0
         self._signal_window_closed = False
+        self._early_pm_min = None
+        self._early_pm_max = None
+        self._early_window_blocked = False
         SIGLOG.info("[SIGNAL] new window %s", slug)
 
     # ------------------------------------------------------------------
@@ -327,6 +380,8 @@ class SignalAnalyzer:
     # Signal fire (with live order)
     # ------------------------------------------------------------------
     def _fire(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> None:
+        if name not in ACTIVE_SIGNAL_NAMES:
+            return
         if self._signal_window_closed:
             return
         if not self._btc_overlay_allows(name, side):
@@ -558,6 +613,13 @@ class SignalAnalyzer:
             return None
         return (hi - last) / hi
 
+    def _dom_move(self, start_elapsed: float, end_elapsed: float) -> float | None:
+        start = self._snap_near(max(0.0, start_elapsed), tolerance=max(5.0, abs(end_elapsed - start_elapsed) * 0.35))
+        end = self._snap_near(max(0.0, end_elapsed), tolerance=5.0)
+        if start is None or end is None:
+            return None
+        return self._dom_price(end) - self._dom_price(start)
+
     def _btc_accel(self, end_elapsed: float, lookback_seconds: float) -> float | None:
         if end_elapsed < 2 * lookback_seconds:
             return None
@@ -627,7 +689,7 @@ class SignalAnalyzer:
         for spec in specs:
             parts = spec.split("_")
             if len(parts) >= 3 and parts[-2] in {"ge", "gt", "le", "lt"}:
-                metric = "".join(parts[:-2])
+                metric = "_".join(parts[:-2])
                 cmp = parts[-2]
                 threshold = float(parts[-1])
                 value = self._signal_metric_value(metric, side, elapsed, snap)
@@ -1052,7 +1114,7 @@ class SignalAnalyzer:
                            f"loser_now={loser_now:.3f} loser_min={loser_min:.3f}")
 
         # 48. vshape_t330_lb120_b0.08_c0.85
-        if 328 <= elapsed <= 335:
+        if 329 <= elapsed <= 331:
             for side in ("Up", "Down"):
                 start = 210
                 mid = 270
@@ -1148,7 +1210,86 @@ class SignalAnalyzer:
                         f"lead={lead:.3f} btc_m180={btc_m180:.4%}",
                     )
 
-        # 55. btcbreak_t600_sq30_mv45_r0.0006_m0.0004
+        # 55. btcsqz_t525_lb90_r0.0006_l0.4
+        if 523 <= elapsed <= 530 and lead >= 0.40:
+            btc_rng90 = self._btc_range(elapsed, 90)
+            if btc_rng90 is not None and btc_rng90 <= 0.0006:
+                self._fire(
+                    "btcsqz_t525_lb90_r0.0006_l0.4",
+                    dom,
+                    d_px,
+                    "92%",
+                    "+$0.42",
+                    f"lead={lead:.3f} btc_rng90={btc_rng90:.4%}",
+                )
+
+        # 55. btcagree_t525_lb60_m0.0004
+        if 523 <= elapsed <= 530:
+            btc_m60 = self._btc_move(elapsed, 60)
+            if btc_m60 is not None:
+                if (dom == "Up" and btc_m60 >= 0.0004) or (dom == "Down" and btc_m60 <= -0.0004):
+                    self._fire(
+                        "btcagree_t525_lb60_m0.0004",
+                        dom,
+                        d_px,
+                        "90%",
+                        "+$0.44",
+                        f"lead={lead:.3f} btc_m60={btc_m60:.4%}",
+                    )
+
+        # 56. btcbreak_t525_sq60_mv60_r0.0012_m0.0004
+        if 523 <= elapsed <= 530:
+            btc_m60 = self._btc_move(elapsed, 60)
+            if btc_m60 is not None:
+                if (dom == "Up" and btc_m60 >= 0.0004) or (dom == "Down" and btc_m60 <= -0.0004):
+                    self._fire(
+                        "btcbreak_t525_sq60_mv60_r0.0012_m0.0004",
+                        dom,
+                        d_px,
+                        "90%",
+                        "+$0.44",
+                        f"lead={lead:.3f} btc_m60={btc_m60:.4%}",
+                    )
+
+        # 57. btcbreak_t135_sq90_mv30_r0.0008_m0.0006
+        if 133 <= elapsed <= 140:
+            btc_rng_pre90 = self._btc_range(elapsed - 30.0, 60.0)
+            btc_m30 = self._btc_move(elapsed, 30)
+            if (
+                btc_rng_pre90 is not None
+                and btc_m30 is not None
+                and btc_rng_pre90 <= 0.0008
+                and ((dom == "Up" and btc_m30 >= 0.0006) or (dom == "Down" and btc_m30 <= -0.0006))
+            ):
+                self._fire(
+                    "btcbreak_t135_sq90_mv30_r0.0008_m0.0006",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$1.17",
+                    f"lead={lead:.3f} pre_rng90={btc_rng_pre90:.4%} btc_m30={btc_m30:.4%}",
+                )
+
+        # 57. btcbreak_t330_sq120_mv60_r0.0005_m0.0004
+        if 328 <= elapsed <= 335:
+            btc_m60 = self._btc_move(elapsed, 60)
+            btc_rng120 = self._btc_range(elapsed - 60.0, 60.0)
+            if (
+                btc_m60 is not None
+                and btc_rng120 is not None
+                and btc_rng120 <= 0.0005
+                and ((dom == "Up" and btc_m60 >= 0.0004) or (dom == "Down" and btc_m60 <= -0.0004))
+            ):
+                self._fire(
+                    "btcbreak_t330_sq120_mv60_r0.0005_m0.0004",
+                    dom,
+                    d_px,
+                    "91%",
+                    "+$0.70",
+                    f"lead={lead:.3f} pre_rng120={btc_rng120:.4%} btc_m60={btc_m60:.4%}",
+                )
+
+        # 58. btcbreak_t600_sq30_mv45_r0.0006_m0.0004
         if 598 <= elapsed <= 605 and lead >= 0.05:
             btc_rng30 = self._btc_range(elapsed, 30)
             btc_m45 = self._btc_move(elapsed, 45)
@@ -1169,7 +1310,7 @@ class SignalAnalyzer:
                         f"lead={lead:.3f} btc_rng30={btc_rng30:.4%} btc_m45={btc_m45:.4%}",
                     )
 
-        # 56. btcsqz_t690_lb30_r0.0006_l0.12
+        # 59. btcsqz_t690_lb30_r0.0006_l0.12
         if 688 <= elapsed <= 695 and lead >= 0.12:
             btc_rng30 = self._btc_range(elapsed, 30)
             if btc_rng30 is not None and btc_rng30 <= 0.0006:
@@ -1182,7 +1323,33 @@ class SignalAnalyzer:
                     f"lead={lead:.3f} btc_rng30={btc_rng30:.4%}",
                 )
 
-        # 57. btcrev_t585_lb180_r0.0005
+        # 60. btcrev_t375_lb180_r0.0016
+        if 374 <= elapsed <= 376 and lead >= 0.05:
+            btc_rebound180 = self._btc_rebound(elapsed, 180, dom)
+            if btc_rebound180 is not None and btc_rebound180 >= 0.0016:
+                self._fire(
+                    "btcrev_t375_lb180_r0.0016",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.57",
+                    f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
+                )
+
+        # 61. btcrev_t570_lb180_r0.0008
+        if 568 <= elapsed <= 575 and lead >= 0.05:
+            btc_rebound180 = self._btc_rebound(elapsed, 180, dom)
+            if btc_rebound180 is not None and btc_rebound180 >= 0.0008:
+                self._fire(
+                    "btcrev_t570_lb180_r0.0008",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.28",
+                    f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
+                )
+
+        # 62. btcrev_t585_lb180_r0.0005
         if 583 <= elapsed <= 590 and lead >= 0.05:
             btc_rebound180 = self._btc_rebound(elapsed, 180, dom)
             if btc_rebound180 is not None and btc_rebound180 >= 0.0005:
@@ -1195,7 +1362,85 @@ class SignalAnalyzer:
                     f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
                 )
 
-        # 58. btcsqz_t720_lb45_r0.0012_l0.3
+        # 63. btcsqz_t495_lb60_r0.0005_l0.4
+        if 494 <= elapsed <= 496 and lead >= 0.40:
+            btc_rng60 = self._btc_range(elapsed, 60)
+            if btc_rng60 is not None and btc_rng60 <= 0.0005:
+                self._fire(
+                    "btcsqz_t495_lb60_r0.0005_l0.4",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.32",
+                    f"lead={lead:.3f} btc_rng60={btc_rng60:.4%}",
+                )
+
+        # 64. btcsqz_t510_lb120_r0.0006_l0.4
+        if 508 <= elapsed <= 515 and lead >= 0.40:
+            btc_rng120 = self._btc_range(elapsed, 120)
+            if btc_rng120 is not None and btc_rng120 <= 0.0006:
+                self._fire(
+                    "btcsqz_t510_lb120_r0.0006_l0.4",
+                    dom,
+                    d_px,
+                    "94%",
+                    "+$0.49",
+                    f"lead={lead:.3f} btc_rng120={btc_rng120:.4%}",
+                )
+
+        # 65. btcsqz_t630_lb75_r0.0005_l0.35
+        if 628 <= elapsed <= 635 and lead >= 0.35:
+            btc_rng75 = self._btc_range(elapsed, 75)
+            if btc_rng75 is not None and btc_rng75 <= 0.0005:
+                self._fire(
+                    "btcsqz_t630_lb75_r0.0005_l0.35",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.43",
+                    f"lead={lead:.3f} btc_rng75={btc_rng75:.4%}",
+                )
+
+        # 64. btcsqz_t645_lb45_r0.0006_l0.12
+        if 643 <= elapsed <= 650 and lead >= 0.12:
+            btc_rng45 = self._btc_range(elapsed, 45)
+            if btc_rng45 is not None and btc_rng45 <= 0.0006:
+                self._fire(
+                    "btcsqz_t645_lb45_r0.0006_l0.12",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.28",
+                    f"lead={lead:.3f} btc_rng45={btc_rng45:.4%}",
+                )
+
+        # 65. btcsqz_t645_lb90_r0.0006_l0.18
+        if 643 <= elapsed <= 650 and lead >= 0.18:
+            btc_rng90 = self._btc_range(elapsed, 90)
+            if btc_rng90 is not None and btc_rng90 <= 0.0006:
+                self._fire(
+                    "btcsqz_t645_lb90_r0.0006_l0.18",
+                    dom,
+                    d_px,
+                    "90%",
+                    "+$0.47",
+                    f"lead={lead:.3f} btc_rng90={btc_rng90:.4%}",
+                )
+
+        # 66. btcsqz_t645_lb90_r0.0006_l0.4
+        if 643 <= elapsed <= 650 and lead >= 0.40:
+            btc_rng90 = self._btc_range(elapsed, 90)
+            if btc_rng90 is not None and btc_rng90 <= 0.0006:
+                self._fire(
+                    "btcsqz_t645_lb90_r0.0006_l0.4",
+                    dom,
+                    d_px,
+                    "92%",
+                    "+$0.39",
+                    f"lead={lead:.3f} btc_rng90={btc_rng90:.4%}",
+                )
+
+        # 66. btcsqz_t720_lb45_r0.0012_l0.3
         if 718 <= elapsed <= 725 and lead >= 0.30:
             btc_rng45 = self._btc_range(elapsed, 45)
             if btc_rng45 is not None and btc_rng45 <= 0.0012:
@@ -1208,7 +1453,7 @@ class SignalAnalyzer:
                     f"lead={lead:.3f} btc_rng45={btc_rng45:.4%}",
                 )
 
-        # 59. btcsqz_t720_lb75_r0.0016_l0.2
+        # 67. btcsqz_t720_lb75_r0.0016_l0.2
         if 718 <= elapsed <= 725 and lead >= 0.20:
             btc_rng75 = self._btc_range(elapsed, 75)
             if btc_rng75 is not None and btc_rng75 <= 0.0016:
@@ -1221,7 +1466,72 @@ class SignalAnalyzer:
                     f"lead={lead:.3f} btc_rng75={btc_rng75:.4%}",
                 )
 
-        # 60. mix_vshape_t585_lb240_b0.12_br120_0.0016
+        # 68. btcsqz_t720_lb60_r0.0008_l0.35
+        if 718 <= elapsed <= 725 and lead >= 0.35:
+            btc_rng60 = self._btc_range(elapsed, 60)
+            if btc_rng60 is not None and btc_rng60 <= 0.0008:
+                self._fire(
+                    "btcsqz_t720_lb60_r0.0008_l0.35",
+                    dom,
+                    d_px,
+                    "91%",
+                    "+$0.36",
+                    f"lead={lead:.3f} btc_rng60={btc_rng60:.4%}",
+                )
+
+        # 68. btcacc_t600_lb20_a0.0002_d0.004
+        if 598 <= elapsed <= 605:
+            btc_m1 = self._btc_move(elapsed - 20.0, 20)
+            btc_m2 = self._btc_move(elapsed, 20)
+            dom_m20 = self._dom_move(elapsed - 20.0, elapsed)
+            if (
+                btc_m1 is not None
+                and btc_m2 is not None
+                and dom_m20 is not None
+                and abs(btc_m2) - abs(btc_m1) >= 0.0002
+                and abs(dom_m20) / 20.0 >= 0.004
+            ):
+                self._fire(
+                    "btcacc_t600_lb20_a0.0002_d0.004",
+                    dom,
+                    d_px,
+                    "93%",
+                    "+$1.22",
+                    f"lead={lead:.3f} btc_acc={(abs(btc_m2) - abs(btc_m1)):.4%} dom_v={abs(dom_m20)/20.0:.4f}",
+                )
+
+        # 69. btcdiv_t480_lb90_b0.0008_c0.8
+        if 478 <= elapsed <= 485 and d_px <= 0.80:
+            btc_m90 = self._btc_move(elapsed, 90)
+            if btc_m90 is not None:
+                if (dom == "Up" and btc_m90 >= 0.0008) or (dom == "Down" and btc_m90 <= -0.0008):
+                    self._fire(
+                        "btcdiv_t480_lb90_b0.0008_c0.8",
+                        dom,
+                        d_px,
+                        "95%",
+                        "+$1.33",
+                        f"lead={lead:.3f} btc_m90={btc_m90:.4%}",
+                    )
+
+        # 70. btcreversal_t345_e120_l45_m0.0006_r0.0003
+        if 343 <= elapsed <= 350:
+            early = self._btc_move(elapsed - 45.0, 120)
+            late = self._btc_move(elapsed, 45)
+            if early is not None and late is not None:
+                if (dom == "Up" and early <= -0.0006 and late >= 0.0003) or (
+                    dom == "Down" and early >= 0.0006 and late <= -0.0003
+                ):
+                    self._fire(
+                        "btcreversal_t345_e120_l45_m0.0006_r0.0003",
+                        dom,
+                        d_px,
+                        "92%",
+                        "+$1.18",
+                        f"lead={lead:.3f} btc_early={early:.4%} btc_late={late:.4%}",
+                    )
+
+        # 71. mix_vshape_t585_lb240_b0.12_br120_0.0016
         if 583 <= elapsed <= 590:
             btc_rng120 = self._btc_range(elapsed, 120)
             if btc_rng120 is not None and btc_rng120 <= 0.0016:
