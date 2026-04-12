@@ -10,7 +10,7 @@ after each fill to free cash.
 Set BOT_STRATEGY_MODE=signal_only to let this module handle all orders
 while the engine still polls prices, heartbeats, and detects fills.
 
-17 active patterns.
+21 active patterns.
 Per-window buy cap: floor(wallet_USDC / 15) signal buys per side (snapshot at window start).
 Pruned live set to 90%+ WR signals on the latest full public replay.
 
@@ -45,6 +45,8 @@ BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
     "accum_t615_b20_n3",
+    "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62",
+    "nf_stairhold_t720_b15_n3_m0.03_c0.0006",
     "btcagree_t525_lb180_m0.001",
     "btcagree_t525_lb180_m0.001_l0.05",
     "btcagree_t795_lb120_m0.0005",
@@ -202,6 +204,7 @@ class SignalAnalyzer:
         self._thread.start()
         mode_label = "LIVE -- orders enabled" if self._live else "log-only"
         SIGLOG.info("[SIGNAL] analyzer thread started (%s) | %d patterns active", mode_label, len(ACTIVE_SIGNAL_NAMES))
+        SIGLOG.info("[SIGNAL] active signals: %s", ", ".join(sorted(ACTIVE_SIGNAL_NAMES)))
 
     def stop(self) -> None:
         self._stop.set()
@@ -624,6 +627,8 @@ class SignalAnalyzer:
     def _signal_metric_value(self, metric: str, side: str, elapsed: float, snap: _PriceSnap) -> float | None:
         if metric == "elapsed":
             return float(elapsed)
+        if metric in {"btcprice", "btc_price"}:
+            return self._btc_price_near(elapsed)
         if metric == "price" or metric == "domprice":
             return float(self._dom_price(snap))
         if metric == "loser" or metric == "loserprice":
@@ -663,6 +668,8 @@ class SignalAnalyzer:
         if metric.startswith("btcmoveabs") and metric[10:].isdigit():
             value = self._btc_move(elapsed, float(metric[10:]))
             return abs(value) if value is not None else None
+        if metric.startswith("btcmove") and metric[7:].isdigit():
+            return self._btc_move(elapsed, float(metric[7:]))
         if metric.startswith("btcrebound") and metric[10:].isdigit():
             return self._btc_rebound(elapsed, float(metric[10:]), side)
         if metric.startswith("baseratio") and "_" in metric:
@@ -1267,6 +1274,46 @@ class SignalAnalyzer:
                 if drop_vel >= 0.0015:
                     self._fire("loserdrop_t840_w60_v0.0015", dom, d_px, "100%", "+$0.69",
                                f"drop_vel={drop_vel:.4f}/s")
+
+        # ==============================================================
+        # v8 NEW DISCOVERY PATTERNS
+        # ==============================================================
+        # 67. nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62
+        if 628 <= elapsed <= 635:
+            btc_rng60 = self._btc_range(elapsed, 60)
+            if btc_rng60 is not None and btc_rng60 <= 0.0006 and d_px >= 0.62 and lead >= 0.22:
+                self._fire(
+                    "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62",
+                    dom,
+                    d_px,
+                    "90.2%",
+                    "+$0.25",
+                    f"lead={lead:.3f} btc_rng60={btc_rng60:.4%} d_px={d_px:.3f}",
+                )
+
+        # 68. nf_stairhold_t720_b15_n3_m0.03_c0.0006
+        if 718 <= elapsed <= 725:
+            s705 = self._snap_near(705)
+            s690 = self._snap_near(690)
+            s675 = self._snap_near(675)
+            btc_move45 = self._btc_move(elapsed, 45)
+            if s705 is not None and s690 is not None and s675 is not None and btc_move45 is not None:
+                if (
+                    self._dom_side(s705) == dom
+                    and self._dom_side(s690) == dom
+                    and self._dom_side(s675) == dom
+                    and abs(btc_move45) <= 0.0006
+                ):
+                    rise = d_px - self._side_price(s675, dom)
+                    if rise >= 0.03:
+                        self._fire(
+                            "nf_stairhold_t720_b15_n3_m0.03_c0.0006",
+                            dom,
+                            d_px,
+                            "96.8%",
+                            "+$0.49",
+                            f"rise={rise:.3f} btc_move45={btc_move45:.4%}",
+                        )
 
         # ==============================================================
         # BTC LAYER PATTERNS (52-60) -- optional, require live BTC feed
