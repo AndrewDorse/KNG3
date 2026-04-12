@@ -10,7 +10,8 @@ after each fill to free cash.
 Set BOT_STRATEGY_MODE=signal_only to let this module handle all orders
 while the engine still polls prices, heartbeats, and detects fills.
 
-14 active patterns.
+17 active patterns.
+Per-window buy cap: floor(wallet_USDC / 15) signal buys per side (snapshot at window start).
 Pruned live set to 90%+ WR signals on the latest full public replay.
 
 All prob/EV values below are ACTUAL TESTED (not claimed).
@@ -31,7 +32,8 @@ CLIP = 5
 TP_PRICE = 0.99
 SIGNAL_BUY_PRICE_PAD = 0.03
 MAX_SIGNAL_TRIGGER_PRICE = 0.90
-MAX_ORDERS_PER_WINDOW = 8
+# Per window: max signal buys on UP = floor(balance / this), same for DOWN (set at window start).
+SIGNAL_USDC_PER_DEAL_PER_SIDE = 15.0
 BTC_LAYER_PATTERN_COUNT = 10
 LEFTOVER_CLEANUP_PRICE = 0.98
 LEFTOVER_CLEANUP_START_ELAPSED = 600.0
@@ -39,14 +41,18 @@ LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
 SIGNAL_WINDOW_CLOSE_PRICE = 0.98
 EARLY_WINDOW_SKIP_CHECK_ELAPSED = 120.0
 EARLY_WINDOW_SKIP_PM_RANGE = 0.60
+BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
     "accum_t615_b20_n3",
     "btcagree_t525_lb180_m0.001",
     "btcagree_t525_lb180_m0.001_l0.05",
+    "btcagree_t795_lb120_m0.0005",
     "btcsqz_t645_lb90_r0.0006_l0.18",
     "btcsqz_t645_lb90_r0.0006_l0.4",
     "btcsqz_t525_lb90_r0.0006_l0.4",
+    "btcbreak_t645_sq90_mv30_r0.0005_m0.0003",
+    "btcrev_t510_lb180_r0.002",
     "flipband_t720_0to1",
     "lbounce_t585_r30_f30_rm003_fm006",
     "nearpeak_t645_g001",
@@ -100,6 +106,9 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "dom_t720_lead30": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
     "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange60_ge_0.0012", "baseratio1_5_gt_3.0", "loser_lt_0.03"),
     "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange45_ge_0.0008", "btcrange30_ge_0.0006", "baseratio1_5_gt_3.0"),
+    "btcsqz_t645_lb90_r0.0006_l0.18": ("baseratio15_60_gt_3.0",),
+    "btcsqz_t645_lb90_r0.0006_l0.4": ("baseratio15_60_gt_3.0",),
+    "btcsqz_t525_lb90_r0.0006_l0.4": ("baseratio15_60_gt_2.5",),
     "vel_t315_w30_v004": ("flips_ge_5",),
     "vshape_t600_lb240_b0.12": ("elapsed_ge_600",),
     "vshape_t600_lb240_b0.08": ("ratio_ge_5.0", "elapsed_ge_600"),
@@ -116,7 +125,7 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71", "btcmoveabs30_gt_0.0008"),
     "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360", "baseratio15_60_gt_2.5"),
     "ddrecov_t615_dd01_r075": ("price_ge_0.75",),
-    "nearpeak_t645_g001": ("btc_range_ge_60_0.0006", "btcrange120_gt_0.0006"),
+    "nearpeak_t645_g001": ("btc_range_ge_60_0.0006", "btcrange120_gt_0.0006", "price_gt_0.85"),
     "loserdrop_t840_w60_v0.0015": ("price_ge_0.8", "base1_lt_0.00109"),
     "ratio_t720_ge4": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
     "spread_t720_ge06": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
@@ -133,8 +142,10 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "loserdrop_t585_w45_v002": ("flips_lt_6", "base5_lt_0.24631"),
     "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04",),
     "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04",),
+    "btcagree_t795_lb120_m0.0005": ("tradesratio5_15_gt_2.0",),
+    "btcrev_t510_lb180_r0.002": ("btcmoveabs30_gt_0.0008",),
     "vel_t645_w90_v003": ("base5_lt_0.07386",),
-    "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012"),
+    "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012", "price_gt_0.85"),
     "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004", "tradesratio1_5_gt_3.0"),
     "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004",),
 }
@@ -169,12 +180,19 @@ class SignalAnalyzer:
         self._dom_at_60: str | None = None
         self._last_order_ts: float = 0.0
         self._pending_tp: list[tuple[str, int]] = []
-        self._orders_placed: int = 0
+        self._buys_placed_up: int = 0
+        self._buys_placed_down: int = 0
+        self._max_buys_per_side: int = 0
+        self._balance_snapshot_usdc: float = 0.0
+        # If set (e.g. by tests/replay), used instead of wallet read for window caps.
+        self._window_balance_override: float | None = None
         self._last_leftover_cleanup_ts: float = 0.0
         self._signal_window_closed: bool = False
         self._early_pm_min: float | None = None
         self._early_pm_max: float | None = None
         self._early_window_blocked: bool = False
+        self._btc_missing_logged: bool = False
+        self._btc_volume_missing_logged: bool = False
 
     def attach(self, engine) -> None:
         self._engine = engine
@@ -272,13 +290,35 @@ class SignalAnalyzer:
         self._loser_at_60 = None
         self._dom_at_60 = None
         self._pending_tp.clear()
-        self._orders_placed = 0
+        self._buys_placed_up = 0
+        self._buys_placed_down = 0
         self._last_leftover_cleanup_ts = 0.0
         self._signal_window_closed = False
         self._early_pm_min = None
         self._early_pm_max = None
         self._early_window_blocked = False
-        SIGLOG.info("[SIGNAL] new window %s", slug)
+        self._btc_missing_logged = False
+        self._btc_volume_missing_logged = False
+
+        if self._window_balance_override is not None:
+            balance_usdc = float(self._window_balance_override)
+        elif self._trader is not None:
+            try:
+                balance_usdc = self._trader.wallet_balance_usdc()
+            except Exception:
+                balance_usdc = 0.0
+        else:
+            balance_usdc = 0.0
+        self._balance_snapshot_usdc = balance_usdc
+        self._max_buys_per_side = int(balance_usdc // SIGNAL_USDC_PER_DEAL_PER_SIDE)
+
+        SIGLOG.info(
+            "[SIGNAL] new window %s | balance=$%.2f | max_signal_buys per_side=%d (1 per $%.0f/side)",
+            slug,
+            balance_usdc,
+            self._max_buys_per_side,
+            SIGNAL_USDC_PER_DEAL_PER_SIDE,
+        )
 
     # ------------------------------------------------------------------
     # Order execution
@@ -290,10 +330,15 @@ class SignalAnalyzer:
         return eng._last_contract.up if side == "Up" else eng._last_contract.down
 
     def _place_buy(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> bool:
-        if self._orders_placed >= MAX_ORDERS_PER_WINDOW:
+        placed_side = self._buys_placed_up if side == "Up" else self._buys_placed_down
+        if placed_side >= self._max_buys_per_side:
             SIGLOG.info(
-                "[SIGNAL] BUY SKIPPED %s | max orders reached (%d) | window=%s",
-                name, MAX_ORDERS_PER_WINDOW, self._window_slug,
+                "[SIGNAL] BUY SKIPPED %s | max per-side reached (%d/%d on %s) | window=%s",
+                name,
+                placed_side,
+                self._max_buys_per_side,
+                side,
+                self._window_slug,
             )
             return False
         if price > MAX_SIGNAL_TRIGGER_PRICE:
@@ -312,12 +357,19 @@ class SignalAnalyzer:
             resp = self._trader.place_limit_buy(token, limit, CLIP)
             order_id = resp.get("orderID") or resp.get("id") or "?"
             self._last_order_ts = time.time()
-            self._orders_placed += 1
+            if side == "Up":
+                self._buys_placed_up += 1
+            else:
+                self._buys_placed_down += 1
             SIGLOG.info(
-                "[SIGNAL] *** BUY PLACED %s | %s @ %.2f x%d ($%.2f) | prob=%s ev(5sh)=%s %s| order=%s | orders=%d | window=%s",
+                "[SIGNAL] *** BUY PLACED %s | %s @ %.2f x%d ($%.2f) | prob=%s ev(5sh)=%s %s| order=%s | up=%d down=%d cap/side=%d | window=%s",
                 name, side, limit, CLIP, notional, prob, ev,
                 f"| {extra} " if extra else "",
-                order_id, self._orders_placed, self._window_slug,
+                order_id,
+                self._buys_placed_up,
+                self._buys_placed_down,
+                self._max_buys_per_side,
+                self._window_slug,
             )
             self._pending_tp.append((side, CLIP))
             return True
@@ -345,6 +397,51 @@ class SignalAnalyzer:
                 SIGLOG.debug("[SIGNAL] TP SELL failed %s x%d: %s -- will retry", side, shares, exc)
                 remaining.append((side, shares))
         self._pending_tp = remaining
+
+    def _btc_data_ok(self) -> bool:
+        eng = self._engine
+        if eng is None:
+            return False
+        if not eng._btc_price_history:
+            return False
+        last = eng._btc_price_history[-1]
+        return last is not None and getattr(last, "price", None) is not None and last.price > 0
+
+    def _btc_volume_ok(self) -> bool:
+        eng = self._engine
+        if eng is None or not eng._btc_price_history:
+            return False
+        history = eng._btc_price_history[-BTC_VOLUME_OK_LOOKBACK_POINTS:]
+        for point in history:
+            if point is None:
+                continue
+            if (getattr(point, "base_volume", 0.0) or 0.0) > 0:
+                return True
+            if (getattr(point, "quote_volume", 0.0) or 0.0) > 0:
+                return True
+            if (getattr(point, "trade_count", 0) or 0) > 0:
+                return True
+        return False
+
+    def _signal_requires_btc(self, name: str) -> bool:
+        if name.startswith("btc") or name.startswith("mix_"):
+            return True
+        if name in CLASSIC_BTC_CONFIRMATION_FILTERS:
+            return True
+        blockers = PATTERN_ENTRY_RISK_BLOCKERS.get(name, ())
+        for blocker in blockers:
+            if any(token in blocker for token in ("btc", "btcrange", "btcmove", "btcrebound", "btcmoveabs")):
+                return True
+            if any(token in blocker for token in ("base", "quote", "trades", "baseratio", "quoteratio", "tradesratio")):
+                return True
+        return False
+
+    def _signal_requires_volume(self, name: str) -> bool:
+        blockers = PATTERN_ENTRY_RISK_BLOCKERS.get(name, ())
+        for blocker in blockers:
+            if any(token in blocker for token in ("base", "quote", "trades", "baseratio", "quoteratio", "tradesratio")):
+                return True
+        return False
 
     def _cleanup_small_leftovers(self, elapsed: float, now: float) -> None:
         if elapsed < LEFTOVER_CLEANUP_START_ELAPSED:
@@ -383,6 +480,22 @@ class SignalAnalyzer:
         if name not in ACTIVE_SIGNAL_NAMES:
             return
         if self._signal_window_closed:
+            return
+        if self._signal_requires_btc(name) and not self._btc_data_ok():
+            if not self._btc_missing_logged:
+                self._btc_missing_logged = True
+                SIGLOG.warning(
+                    "[SIGNAL] BTC data missing or invalid | skipping BTC-dependent signals | window=%s",
+                    self._window_slug,
+                )
+            return
+        if self._signal_requires_volume(name) and not self._btc_volume_ok():
+            if not self._btc_volume_missing_logged:
+                self._btc_volume_missing_logged = True
+                SIGLOG.warning(
+                    "[SIGNAL] BTC volume data missing | skipping volume-dependent signals | window=%s",
+                    self._window_slug,
+                )
             return
         if not self._btc_overlay_allows(name, side):
             return
@@ -1251,6 +1364,21 @@ class SignalAnalyzer:
                         f"lead={lead:.3f} btc_m60={btc_m60:.4%}",
                     )
 
+        # 56. btcagree_t795_lb120_m0.0005
+        if 793 <= elapsed <= 800 and lead >= 0.05:
+            btc_m120 = self._btc_move(elapsed, 120)
+            if btc_m120 is not None and abs(btc_m120) >= 0.0005:
+                btc_side = "Up" if btc_m120 > 0 else "Down"
+                if btc_side == dom:
+                    self._fire(
+                        "btcagree_t795_lb120_m0.0005",
+                        dom,
+                        d_px,
+                        "100%",
+                        "+$0.30",
+                        f"lead={lead:.3f} btc_m120={btc_m120:.4%}",
+                    )
+
         # 57. btcbreak_t135_sq90_mv30_r0.0008_m0.0006
         if 133 <= elapsed <= 140:
             btc_rng_pre90 = self._btc_range(elapsed - 30.0, 60.0)
@@ -1310,6 +1438,25 @@ class SignalAnalyzer:
                         f"lead={lead:.3f} btc_rng30={btc_rng30:.4%} btc_m45={btc_m45:.4%}",
                     )
 
+        # 58. btcbreak_t645_sq90_mv30_r0.0005_m0.0003
+        if 643 <= elapsed <= 650:
+            btc_rng_pre90 = self._btc_range(elapsed - 30.0, 60.0)
+            btc_m30 = self._btc_move(elapsed, 30)
+            if (
+                btc_rng_pre90 is not None
+                and btc_m30 is not None
+                and btc_rng_pre90 <= 0.0005
+                and ((dom == "Up" and btc_m30 >= 0.0003) or (dom == "Down" and btc_m30 <= -0.0003))
+            ):
+                self._fire(
+                    "btcbreak_t645_sq90_mv30_r0.0005_m0.0003",
+                    dom,
+                    d_px,
+                    "100%",
+                    "+$0.86",
+                    f"lead={lead:.3f} pre_rng90={btc_rng_pre90:.4%} btc_m30={btc_m30:.4%}",
+                )
+
         # 59. btcsqz_t690_lb30_r0.0006_l0.12
         if 688 <= elapsed <= 695 and lead >= 0.12:
             btc_rng30 = self._btc_range(elapsed, 30)
@@ -1333,6 +1480,19 @@ class SignalAnalyzer:
                     d_px,
                     "90%",
                     "+$0.57",
+                    f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
+                )
+
+        # 60. btcrev_t510_lb180_r0.002
+        if 508 <= elapsed <= 515 and lead >= 0.05:
+            btc_rebound180 = self._btc_rebound(elapsed, 180, dom)
+            if btc_rebound180 is not None and btc_rebound180 >= 0.002:
+                self._fire(
+                    "btcrev_t510_lb180_r0.002",
+                    dom,
+                    d_px,
+                    "100%",
+                    "+$0.55",
                     f"lead={lead:.3f} btc_rebound180={btc_rebound180:.4%}",
                 )
 
