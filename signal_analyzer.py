@@ -44,13 +44,9 @@ EARLY_WINDOW_SKIP_PM_RANGE = 0.60
 BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
-    "accum_t615_b20_n3",
-    "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62",
-    "nf_stairhold_t720_b15_n3_m0.03_c0.0006",
     "btcagree_t525_lb180_m0.001",
     "btcagree_t525_lb180_m0.001_l0.05",
     "btcagree_t795_lb120_m0.0005",
-    "btcsqz_t645_lb90_r0.0006_l0.18",
     "btcsqz_t645_lb90_r0.0006_l0.4",
     "btcsqz_t525_lb90_r0.0006_l0.4",
     "btcbreak_t645_sq90_mv30_r0.0005_m0.0003",
@@ -108,7 +104,11 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "dom_t720_lead30": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002"),
     "btcsqz_t720_lb45_r0.0012_l0.3": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange60_ge_0.0012", "baseratio1_5_gt_3.0", "loser_lt_0.03"),
     "btcsqz_t720_lb75_r0.0016_l0.2": ("elapsed_ge_720", "btc_move_abs_lt_90_0.0002", "btcrange45_ge_0.0008", "btcrange30_ge_0.0006", "baseratio1_5_gt_3.0"),
-    "btcsqz_t645_lb90_r0.0006_l0.18": ("baseratio15_60_gt_3.0",),
+    "btcsqz_t645_lb90_r0.0006_l0.18": (
+        "baseratio15_60_gt_3.0",
+        "trades1_ge_2.0",
+        "btcmove90_le_-0.0001136109",
+    ),
     "btcsqz_t645_lb90_r0.0006_l0.4": ("baseratio15_60_gt_3.0",),
     "btcsqz_t525_lb90_r0.0006_l0.4": ("baseratio15_60_gt_2.5",),
     "vel_t315_w30_v004": ("flips_ge_5",),
@@ -144,10 +144,11 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "loserdrop_t585_w45_v002": ("flips_lt_6", "base5_lt_0.24631"),
     "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04",),
     "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04",),
-    "btcagree_t795_lb120_m0.0005": ("tradesratio5_15_gt_2.0",),
+    "btcagree_t795_lb120_m0.0005": ("tradesratio5_15_gt_2.0", "domprice_ge_0.66"),
     "btcrev_t510_lb180_r0.002": ("btcmoveabs30_gt_0.0008",),
     "vel_t645_w90_v003": ("base5_lt_0.07386",),
-    "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012", "price_gt_0.85"),
+    "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012", "price_gt_0.85", "elapsed_ge_613.0"),
+    "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62": ("elapsed_ge_629.0", "losermove60_ge_-0.3684210526"),
     "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004", "tradesratio1_5_gt_3.0"),
     "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004",),
 }
