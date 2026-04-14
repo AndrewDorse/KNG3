@@ -34,7 +34,7 @@ class BotConfigError(RuntimeError):
 class BotConfig:
     private_key: str
     funder: str
-    bot_version: str = "2026-04-13 01:00:58"
+    bot_version: str = "2026-04-14 18:43:18"
     signature_type: int = 0
     dry_run: bool = True
     poll_interval_seconds: float = 1.0
@@ -125,7 +125,7 @@ class BotConfig:
         return cls(
             private_key=private_key,
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "2026-04-13 01:00:58").strip(),
+            bot_version=os.getenv("BOT_VERSION", "2026-04-14 18:43:18").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),
@@ -135,7 +135,7 @@ class BotConfig:
             request_timeout_seconds=_env_float("BOT_REQUEST_TIMEOUT_SECONDS", 10.0),
             log_level=os.getenv("BOT_LOG_LEVEL", "INFO").upper(),
             force_exit_before_end_seconds=_env_int("BOT_FORCE_EXIT_BEFORE_END_SECONDS", 15),
-            shares_per_level=max(5, _env_int("BOT_SHARES_PER_LEVEL", 5)),
+            shares_per_level=max(1, _env_int("BOT_SHARES_PER_LEVEL", 5)),
             ladder_prices=ladder_prices,
             order_cooldown_seconds=_env_float("BOT_ORDER_COOLDOWN_SECONDS", 3.0),
             hedge_offset=_env_float("BOT_HEDGE_OFFSET", 0.02),

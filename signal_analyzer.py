@@ -46,19 +46,19 @@ BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 ACTIVE_SIGNAL_NAMES: set[str] = {
     "btcagree_t525_lb180_m0.001",
     "btcagree_t525_lb180_m0.001_l0.05",
-    "btcagree_t795_lb120_m0.0005",
-    "btcsqz_t645_lb90_r0.0006_l0.4",
     "btcsqz_t525_lb90_r0.0006_l0.4",
-    "btcbreak_t645_sq90_mv30_r0.0005_m0.0003",
     "btcrev_t510_lb180_r0.002",
-    "flipband_t720_0to1",
     "lbounce_t585_r30_f30_rm003_fm006",
-    "nearpeak_t645_g001",
     "ratio_t720_ge4",
     "rddrecov_t360_dd0.15_r0.75",
     "rddrecov_t360_dd0.2_r0.75",
     "spread_squeeze_t720_drop20",
     "spread_t720_ge06",
+}
+
+CANDIDATE_SIGNAL_NAMES: set[str] = {
+    "btcsqz_t645_lb90_r0.0006_l0.4",
+    "nearpeak_t645_g001",
 }
 
 # Best blended set from BTC overlay search.
@@ -109,8 +109,8 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
         "trades1_ge_2.0",
         "btcmove90_le_-0.0001136109",
     ),
-    "btcsqz_t645_lb90_r0.0006_l0.4": ("baseratio15_60_gt_3.0",),
-    "btcsqz_t525_lb90_r0.0006_l0.4": ("baseratio15_60_gt_2.5",),
+    "btcsqz_t645_lb90_r0.0006_l0.4": ("baseratio15_60_gt_3.0", "quote1_lt_6.2000892004", "losermove60_lt_-0.4782608696"),
+    "btcsqz_t525_lb90_r0.0006_l0.4": ("baseratio15_60_gt_2.5", "flips_gt_8.0", "tradesratio15_60_gt_1.4110953058", "btcprice_lt_68810.57"),
     "vel_t315_w30_v004": ("flips_ge_5",),
     "vshape_t600_lb240_b0.12": ("elapsed_ge_600",),
     "vshape_t600_lb240_b0.08": ("ratio_ge_5.0", "elapsed_ge_600"),
@@ -118,19 +118,19 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "vshape_t585_lb240_b0.15_c0.95": ("btc_range_ge_90_0.0008", "losermove30_gt_-0.1176470588", "sidemove30_lt_0.0819672131"),
     "mix_vshape_t585_lb240_b0.12_br120_0.0016": ("btc_range_ge_90_0.0008",),
     "mix_loserdrop_t750_w20_v0.0015_br60_0.0005": ("elapsed_ge_750", "base1_lt_0.00026", "price_gt_0.85"),
-    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001", "btcmoveabs90_lt_0.0002", "btcmoveabs180_gt_0.0004", "tradesratio15_60_gt_3.0"),
+    "spread_squeeze_t720_drop20": ("btc_range_ge_45_0.0008", "btc_range_ge_60_0.001", "btcmoveabs90_lt_0.0002", "btcmoveabs180_gt_0.0004", "tradesratio15_60_gt_3.0", "btcmoveabs30_gt_0.0004399364", "losermove30_gt_0.9"),
     "twapgap_t585_lb300_g005": ("btc_range_ge_120_0.0016", "quote5_lt_13236.7510394007"),
     "btcrev_t585_lb180_r0.0005": ("btc_range_ge_120_0.0016", "trades15_lt_498"),
     "btcsqz_t690_lb30_r0.0006_l0.12": ("price_ge_0.75",),
     "crossover_t600_k60": ("elapsed_ge_600", "losermove60_lt_-0.328358209"),
     "crossover_t600_k30": ("elapsed_ge_599",),
-    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71", "btcmoveabs30_gt_0.0008"),
-    "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360", "baseratio15_60_gt_2.5"),
+    "rddrecov_t360_dd0.15_r0.75": ("elapsed_ge_360", "domprice_gt_0.71", "btcmoveabs30_gt_0.0008", "sidemove60_gt_0.5"),
+    "rddrecov_t360_dd0.2_r0.75": ("elapsed_ge_360", "baseratio15_60_gt_2.5", "btcmove30_lt_-0.0005758616"),
     "ddrecov_t615_dd01_r075": ("price_ge_0.75",),
     "nearpeak_t645_g001": ("btc_range_ge_60_0.0006", "btcrange120_gt_0.0006", "price_gt_0.85"),
     "loserdrop_t840_w60_v0.0015": ("price_ge_0.8", "base1_lt_0.00109"),
-    "ratio_t720_ge4": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
-    "spread_t720_ge06": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012"),
+    "ratio_t720_ge4": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012", "btcmoveabs60_lt_1.52508e-05", "losermove30_lt_-0.5"),
+    "spread_t720_ge06": ("elapsed_ge_720", "loser_lt_0.05", "btcrange60_gt_0.0012", "btcmoveabs60_lt_1.52508e-05", "losermove30_lt_-0.5"),
     "low_vol_t600_flip2": ("btc_range_ge_60_0.0008", "trades1_gt_3"),
     "low_vol_t720_flip2": ("btc_range_ge_30_0.0004", "baseratio5_15_gt_1.2"),
     "btcbreak_t600_sq30_mv45_r0.0006_m0.0004": ("elapsed_ge_600",),
@@ -140,17 +140,18 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "reversal_300_to_600": ("loserdrop30_lt_0.02",),
     "loserfloor_t495": ("btcrebound120_lt_0.0008100599",),
     "lbounce_t240_r60_f15_rm005_fm006": ("btcrange60_gt_0.0009086287",),
-    "lbounce_t585_r30_f30_rm003_fm006": ("btcmoveabs60_gt_0.0005183479",),
+    "lbounce_t585_r30_f30_rm003_fm006": ("btcmoveabs60_gt_0.0005183479", "losermove60_lt_-0.2592592593"),
     "loserdrop_t585_w45_v002": ("flips_lt_6", "base5_lt_0.24631"),
-    "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04",),
-    "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04",),
-    "btcagree_t795_lb120_m0.0005": ("tradesratio5_15_gt_2.0", "domprice_ge_0.66"),
-    "btcrev_t510_lb180_r0.002": ("btcmoveabs30_gt_0.0008",),
+    "btcagree_t525_lb180_m0.001": ("losermove30_lt_0.04", "btcprice_gt_72930.27"),
+    "btcagree_t525_lb180_m0.001_l0.05": ("losermove30_lt_0.04", "btcprice_gt_72930.27"),
+    "btcagree_t795_lb120_m0.0005": ("tradesratio5_15_gt_2.0", "domprice_ge_0.66", "btcmove120_gt_-0.0006204365"),
+    "btcrev_t510_lb180_r0.002": ("btcmoveabs30_gt_0.0008", "sidemove60_gt_0.8235294118"),
     "vel_t645_w90_v003": ("base5_lt_0.07386",),
     "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012", "price_gt_0.85", "elapsed_ge_613.0"),
     "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62": ("elapsed_ge_629.0", "losermove60_ge_-0.3684210526"),
+    "nf_breakquiet_t630_pre45_post60_pr0.02_mv0.06_r0.0006": ("tradesratio5_30_lt_0.1061946903", "losermove60_lt_-0.5333333333", "base60_gt_9.4374", "tradesratio5_30_gt_2.1823834197"),
     "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004", "tradesratio1_5_gt_3.0"),
-    "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004",),
+    "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004", "sidemove30_gt_0.1904761905"),
 }
 
 
@@ -1315,6 +1316,27 @@ class SignalAnalyzer:
                             "+$0.49",
                             f"rise={rise:.3f} btc_move45={btc_move45:.4%}",
                         )
+
+        # 69. nf_breakquiet_t630_pre45_post60_pr0.02_mv0.06_r0.0006
+        if 628 <= elapsed <= 635:
+            btc_rng60 = self._btc_range(elapsed, 60)
+            if btc_rng60 is not None and btc_rng60 <= 0.0006:
+                pre_end = self._history[-1].elapsed - 60.0
+                pre_start = pre_end - 45.0
+                if pre_start >= 0:
+                    btc_rng_pre = self._btc_range(pre_end, 45)
+                    s570 = self._snap_near(570)
+                    if btc_rng_pre is not None and btc_rng_pre <= 0.02 and s570 is not None:
+                        rise = d_px - self._side_price(s570, dom)
+                        if rise >= 0.06:
+                            self._fire(
+                                "nf_breakquiet_t630_pre45_post60_pr0.02_mv0.06_r0.0006",
+                                dom,
+                                d_px,
+                                "94.7%",
+                                "+$0.59",
+                                f"rise={rise:.3f} btc_rng60={btc_rng60:.4%} btc_rng_pre={btc_rng_pre:.4%}",
+                            )
 
         # ==============================================================
         # BTC LAYER PATTERNS (52-60) -- optional, require live BTC feed

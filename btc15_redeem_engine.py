@@ -30,6 +30,7 @@ _REPO_ROOT = Path(__file__).resolve().parent
 MIMIC_PARAMS_JSON = _REPO_ROOT / "exports" / "wallet10_mimic_search.json"
 AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
 STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
+STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"
 MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
 STRATEGY_PROFILE_ID = AA1_STRATEGY_PROFILE_ID
 
@@ -72,6 +73,178 @@ S0_LATE_TREND_START_SECONDS = 420
 S0_LATE_TREND_TARGET_SHARE = 0.58
 S0_LATE_TREND_HEDGE_MAX_PRICE = 0.32
 S0_LATE_TREND_MIN_WIN_PNL = 2.0
+S0_META_DECISION_DELAY_SECONDS = 180
+S0_META_BASELINE = {
+    "label": "baseline",
+    "primary_price_min": S0_PRIMARY_PRICE_MIN,
+    "primary_price_max": S0_PRIMARY_PRICE_MAX,
+    "primary_price_soft_max": S0_PRIMARY_PRICE_SOFT_MAX,
+    "primary_price_hard_max": S0_PRIMARY_PRICE_HARD_MAX,
+    "hedge_max_price": S0_HEDGE_MAX_PRICE,
+    "late_hedge_max_price": S0_LATE_HEDGE_MAX_PRICE,
+    "primary_target_share": S0_PRIMARY_TARGET_SHARE,
+    "hedge_target_share": S0_HEDGE_TARGET_SHARE,
+    "target_directional_ratio": S0_TARGET_DIRECTIONAL_RATIO,
+    "target_guarantee_ratio": S0_TARGET_GUARANTEE_RATIO,
+    "late_repair_seconds": S0_LATE_REPAIR_SECONDS,
+    "late_trend_start_seconds": S0_LATE_TREND_START_SECONDS,
+    "late_trend_target_share": S0_LATE_TREND_TARGET_SHARE,
+    "late_trend_hedge_max_price": S0_LATE_TREND_HEDGE_MAX_PRICE,
+    "late_trend_min_win_pnl": S0_LATE_TREND_MIN_WIN_PNL,
+    "primary_flip_threshold": 0.03,
+}
+S0_META_LOCAL_172 = {
+    "label": "local_172",
+    "primary_price_min": 0.42,
+    "primary_price_max": 0.75,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.88,
+    "hedge_max_price": 0.22,
+    "late_hedge_max_price": 0.45,
+    "primary_target_share": 0.67,
+    "hedge_target_share": 0.36,
+    "target_directional_ratio": 1.00,
+    "target_guarantee_ratio": 0.84,
+    "late_repair_seconds": 120,
+    "late_trend_start_seconds": 360,
+    "late_trend_target_share": 0.64,
+    "late_trend_hedge_max_price": 0.22,
+    "late_trend_min_win_pnl": 2.0,
+    "primary_flip_threshold": 0.10,
+}
+S0_META_LOCAL_153 = {
+    "label": "local_153",
+    "primary_price_min": 0.45,
+    "primary_price_max": 0.72,
+    "primary_price_soft_max": 0.82,
+    "primary_price_hard_max": 0.84,
+    "hedge_max_price": 0.22,
+    "late_hedge_max_price": 0.40,
+    "primary_target_share": 0.64,
+    "hedge_target_share": 0.28,
+    "target_directional_ratio": 1.04,
+    "target_guarantee_ratio": 0.84,
+    "late_repair_seconds": 120,
+    "late_trend_start_seconds": 330,
+    "late_trend_target_share": 0.64,
+    "late_trend_hedge_max_price": 0.26,
+    "late_trend_min_win_pnl": 1.0,
+    "primary_flip_threshold": 0.06,
+}
+S0_META_FILTERED = {
+    "label": "filtered",
+    "primary_price_min": 0.45,
+    "primary_price_max": 0.70,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.84,
+    "hedge_max_price": 0.22,
+    "late_hedge_max_price": 0.40,
+    "primary_target_share": 0.70,
+    "hedge_target_share": 0.30,
+    "target_directional_ratio": 1.00,
+    "target_guarantee_ratio": 0.92,
+    "late_repair_seconds": 150,
+    "late_trend_start_seconds": 450,
+    "late_trend_target_share": 0.68,
+    "late_trend_hedge_max_price": 0.24,
+    "late_trend_min_win_pnl": 1.5,
+    "primary_flip_threshold": 0.08,
+}
+S0_META_H5 = {
+    "label": "H5",
+    "primary_price_min": 0.48,
+    "primary_price_max": 0.68,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.88,
+    "hedge_max_price": 0.26,
+    "late_hedge_max_price": 0.45,
+    "primary_target_share": 0.72,
+    "hedge_target_share": 0.30,
+    "target_directional_ratio": 1.14,
+    "target_guarantee_ratio": 0.96,
+    "late_repair_seconds": 120,
+    "late_trend_start_seconds": 360,
+    "late_trend_target_share": 0.68,
+    "late_trend_hedge_max_price": 0.32,
+    "late_trend_min_win_pnl": 2.0,
+    "primary_flip_threshold": 0.03,
+}
+S0_META_ROBUST = {
+    "label": "robust",
+    "primary_price_min": 0.42,
+    "primary_price_max": 0.70,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.82,
+    "hedge_max_price": 0.28,
+    "late_hedge_max_price": 0.40,
+    "primary_target_share": 0.64,
+    "hedge_target_share": 0.36,
+    "target_directional_ratio": 1.08,
+    "target_guarantee_ratio": 0.88,
+    "late_repair_seconds": 150,
+    "late_trend_start_seconds": 360,
+    "late_trend_target_share": 0.64,
+    "late_trend_hedge_max_price": 0.26,
+    "late_trend_min_win_pnl": 3.0,
+    "primary_flip_threshold": 0.10,
+}
+S0_META_DEEP064 = {
+    "label": "deep064",
+    "primary_price_min": 0.42,
+    "primary_price_max": 0.70,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.82,
+    "hedge_max_price": 0.28,
+    "late_hedge_max_price": 0.38,
+    "primary_target_share": 0.64,
+    "hedge_target_share": 0.33,
+    "target_directional_ratio": 1.08,
+    "target_guarantee_ratio": 0.92,
+    "late_repair_seconds": 180,
+    "late_trend_start_seconds": 450,
+    "late_trend_target_share": 0.68,
+    "late_trend_hedge_max_price": 0.24,
+    "late_trend_min_win_pnl": 3.0,
+    "primary_flip_threshold": 0.10,
+}
+S0_META_H2 = {
+    "label": "H2",
+    "primary_price_min": 0.40,
+    "primary_price_max": 0.75,
+    "primary_price_soft_max": 0.78,
+    "primary_price_hard_max": 0.88,
+    "hedge_max_price": 0.24,
+    "late_hedge_max_price": 0.36,
+    "primary_target_share": 0.62,
+    "hedge_target_share": 0.40,
+    "target_directional_ratio": 1.18,
+    "target_guarantee_ratio": 0.88,
+    "late_repair_seconds": 90,
+    "late_trend_start_seconds": 360,
+    "late_trend_target_share": 0.68,
+    "late_trend_hedge_max_price": 0.34,
+    "late_trend_min_win_pnl": 2.0,
+    "primary_flip_threshold": 0.05,
+}
+S0_META_H1 = {
+    "label": "H1",
+    "primary_price_min": 0.48,
+    "primary_price_max": 0.75,
+    "primary_price_soft_max": 0.84,
+    "primary_price_hard_max": 0.84,
+    "hedge_max_price": 0.35,
+    "late_hedge_max_price": 0.45,
+    "primary_target_share": 0.62,
+    "hedge_target_share": 0.30,
+    "target_directional_ratio": 1.18,
+    "target_guarantee_ratio": 0.88,
+    "late_repair_seconds": 60,
+    "late_trend_start_seconds": 330,
+    "late_trend_target_share": 0.56,
+    "late_trend_hedge_max_price": 0.34,
+    "late_trend_min_win_pnl": 1.5,
+    "primary_flip_threshold": 0.03,
+}
 LATE_REPAIR_SECONDS = 120
 LATE_TREND_START_SECONDS = 300
 LATE_TREND_CLEAR_PRICE = 0.55
@@ -83,7 +256,7 @@ LATE_TREND_TARGET_SHARE = 0.66
 LATE_TREND_MIN_WIN_PNL = 1.5
 PRICE_HISTORY_RETENTION_SECONDS = 120
 BTC_PRICE_HISTORY_RETENTION_SECONDS = 960
-TP_PRICE = 0.97
+TP_PRICE = 0.99
 EARLY_EXIT_WIN_PRICE = 0.99
 EARLY_EXIT_LOSE_PRICE = 0.01
 HEDGE_SALVAGE_MIN_PRICE = 0.03
@@ -94,6 +267,7 @@ LEFTOVER_CLEANUP_PRICE = 0.98
 LEFTOVER_CLEANUP_BALANCE_MAX = 5.0
 LEFTOVER_CLEANUP_START_SECONDS_REMAINING = 300.0
 LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
+EXIT_RECONCILE_INTERVAL_SECONDS = 30.0
 # "current" phase ramp (same as run_named_profiles strategy_0 / price-history replay).
 PHASE_SPEND_CAPS = (
     (60, 0.05),
@@ -156,6 +330,8 @@ class ManagedExitOrder:
     purpose: str
     price: float
     shares: int
+    placed_at: float
+    cancel_requested_at: float | None = None
 
 
 @dataclass(slots=True)
@@ -240,6 +416,8 @@ class Btc15RedeemEngine:
         self._current_elapsed = 0.0
         self._strategy_primary_side: str | None = None
         self._late_trend_locked_side: str | None = None
+        self._s0_meta_action: str | None = None
+        self._s0_meta_profile: dict[str, float | str] | None = None
         self._primary_reversals = 0
         self._last_primary_switch_time = 0.0
         self._tp_phase_started = False
@@ -330,7 +508,7 @@ class Btc15RedeemEngine:
         if self._strategy_mode_signal_only():
             return "SIGNAL_ANALYZER_v1"
         if self._strategy_mode_strategy_0():
-            return STRATEGY_0_PROFILE_ID
+            return STRATEGY_0_META_PROFILE_ID
         return AA1_STRATEGY_PROFILE_ID
 
     def shutdown(self, *_: Any) -> None:
@@ -378,9 +556,10 @@ class Btc15RedeemEngine:
         if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
             LOGGER.warning(
                 "Usable budget below target minimum at startup: have $%.2f after reserve, target is $%.2f. "
-                "Bot will keep running and retry on future windows.",
+                "Bot will keep running; trading can still proceed once budget is at least $%.2f.",
                 self._window_budget_usdc,
                 self.config.strategy_min_budget_usdc,
+                self._minimum_tradable_budget_usdc(),
             )
 
         while not self._shutdown:
@@ -466,10 +645,10 @@ class Btc15RedeemEngine:
         self._maybe_record_price_snapshot(contract, snapshot, elapsed, seconds_remaining)
         self._maintain_passive_maker_orders(contract, snapshot, elapsed, seconds_remaining)
 
-        if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
+        if not self._has_tradable_budget():
             self._no_signal_reason = (
                 f"waiting for balance settlement: budget ${self._window_budget_usdc:.2f} "
-                f"< min ${self.config.strategy_min_budget_usdc:.2f}"
+                f"< tradable ${self._minimum_tradable_budget_usdc():.2f}"
             )
         elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem():
             self._no_signal_reason = "exit mode active"
@@ -539,6 +718,8 @@ class Btc15RedeemEngine:
         self._current_elapsed = 0.0
         self._strategy_primary_side = None
         self._late_trend_locked_side = None
+        self._s0_meta_action = None
+        self._s0_meta_profile = None
         self._primary_reversals = 0
         self._last_primary_switch_time = 0.0
         self._tp_phase_started = False
@@ -682,25 +863,14 @@ class Btc15RedeemEngine:
             )
         elif self._strategy_mode_strategy_0():
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | entry_delay=%ds | new_cutoff=%ds | flip=%.2f | "
-                "primary[%.2f-%.2f] soft<=%.2f hedge<=%.2f late_hedge<=%.2f | "
-                "targets prim_share>%.2f hedge_share>%.2f dir>=%.2f guar>=%.2f | late_trend>=%ds repair<=%ds | tp=$%.2f",
+                "[STRATEGY PARAMS] %s | profile=%s | env_entry_delay=%ds | meta_decision_delay=%ds | new_cutoff=%ds | "
+                "meta_profiles=baseline,filtered,local_172,local_153,H5,robust,deep064,H2,H1,skip | selector=v4_delay12_wr739_pnl1386 | "
+                "signals=unchanged(log-only) | tp=$%.2f",
                 contract.slug,
                 self._profile_label(),
                 self.config.strategy_entry_delay_seconds,
+                S0_META_DECISION_DELAY_SECONDS,
                 self.config.strategy_new_order_cutoff_seconds,
-                self.config.strategy_primary_flip_threshold,
-                S0_PRIMARY_PRICE_MIN,
-                S0_PRIMARY_PRICE_MAX,
-                S0_PRIMARY_PRICE_SOFT_MAX,
-                S0_HEDGE_MAX_PRICE,
-                S0_LATE_HEDGE_MAX_PRICE,
-                S0_PRIMARY_TARGET_SHARE,
-                S0_HEDGE_TARGET_SHARE,
-                S0_TARGET_DIRECTIONAL_RATIO,
-                S0_TARGET_GUARANTEE_RATIO,
-                int(S0_LATE_TREND_START_SECONDS),
-                S0_LATE_REPAIR_SECONDS,
                 TP_PRICE,
             )
         else:
@@ -718,14 +888,14 @@ class Btc15RedeemEngine:
                 AA1_MAX_OPEN_IMBALANCE_ORDERS,
                 TP_PRICE,
             )
-        if self._window_budget_usdc < self.config.strategy_min_budget_usdc:
+        if not self._has_tradable_budget():
             self._balance_retry_attempts_remaining = self.config.strategy_balance_retry_attempts
             self._next_balance_retry_ts = time.time() + self.config.strategy_balance_retry_seconds
             LOGGER.warning(
-                "[BALANCE WAIT] %s | budget=$%.2f below min=$%.2f | will retry %d times every %ds",
+                "[BALANCE WAIT] %s | budget=$%.2f below tradable=$%.2f | will retry %d times every %ds",
                 contract.slug,
                 self._window_budget_usdc,
-                self.config.strategy_min_budget_usdc,
+                self._minimum_tradable_budget_usdc(),
                 self._balance_retry_attempts_remaining,
                 self.config.strategy_balance_retry_seconds,
             )
@@ -853,7 +1023,7 @@ class Btc15RedeemEngine:
     ) -> None:
         if self.config.dry_run:
             return
-        if self._window_budget_usdc >= self.config.strategy_min_budget_usdc:
+        if self._has_tradable_budget():
             return
         if self._balance_retry_attempts_remaining <= 0:
             return
@@ -881,7 +1051,7 @@ class Btc15RedeemEngine:
             refreshed_budget,
         )
 
-        if refreshed_budget >= self.config.strategy_min_budget_usdc:
+        if refreshed_budget >= self._minimum_tradable_budget_usdc():
             LOGGER.info(
                 "[BALANCE READY] %s | refreshed budget reached $%.2f and trading is enabled for this window",
                 contract.slug,
@@ -1011,13 +1181,20 @@ class Btc15RedeemEngine:
 
         open_ids = self._extract_live_ids(open_orders)
         self._refresh_exit_orders(contract, open_ids)
+        self._reconcile_exit_orders(contract, open_ids)
 
         if self._exit_mode_winner_side is not None:
-            self._ensure_exit_sell(contract, self._exit_mode_winner_side, TP_PRICE, purpose="tp")
+            self._ensure_exit_sell(
+                contract,
+                self._exit_mode_winner_side,
+                self._desired_exit_price(contract, self._exit_mode_winner_side, "tp"),
+                purpose="tp",
+            )
             loser_side = "DOWN" if self._exit_mode_winner_side == "UP" else "UP"
             if self._exit_mode_winner_side in self._fully_exited_sides:
-                salvage_price = self._salvage_price_for(loser_side)
+                salvage_price = self._desired_exit_price(contract, loser_side, "salvage")
                 self._ensure_exit_sell(contract, loser_side, salvage_price, purpose="salvage")
+        self._force_late_exit_cleanup(contract)
 
     def _cleanup_small_leftovers(self, contract: ActiveContract, seconds_remaining: float, now: float) -> None:
         if seconds_remaining > LEFTOVER_CLEANUP_START_SECONDS_REMAINING:
@@ -1064,7 +1241,7 @@ class Btc15RedeemEngine:
                 continue
             token = contract.up if side_label == "UP" else contract.down
             balance = self.trader.token_balance(token.token_id)
-            if balance < 5:
+            if balance < 1:
                 self._fully_exited_sides.add(side_label)
                 LOGGER.info(
                     "[EXIT FILLED] %s | side=%s | purpose=%s | price=$%.2f | remaining=%.4f",
@@ -1075,13 +1252,22 @@ class Btc15RedeemEngine:
                     balance,
                 )
             else:
-                LOGGER.info(
-                    "[EXIT CLEAR] %s | side=%s | purpose=%s | order gone but balance=%.4f remains",
-                    contract.slug,
-                    side_label,
-                    managed.purpose,
-                    balance,
-                )
+                if managed.cancel_requested_at is not None:
+                    LOGGER.info(
+                        "[EXIT CLEARED] %s | side=%s | purpose=%s | balance=%.4f remains after cancel",
+                        contract.slug,
+                        side_label,
+                        managed.purpose,
+                        balance,
+                    )
+                else:
+                    LOGGER.info(
+                        "[EXIT CLEAR] %s | side=%s | purpose=%s | order gone but balance=%.4f remains",
+                        contract.slug,
+                        side_label,
+                        managed.purpose,
+                        balance,
+                    )
             self._exit_orders_by_side.pop(side_label, None)
 
     def _salvage_price_for(self, side_label: str) -> float:
@@ -1090,25 +1276,112 @@ class Btc15RedeemEngine:
         target = max(HEDGE_SALVAGE_MIN_PRICE, min(0.25, current + HEDGE_SALVAGE_BUFFER))
         return round(target, 2)
 
+    def _desired_exit_price(self, contract: ActiveContract, side_label: str, purpose: str) -> float:
+        token = contract.up if side_label == "UP" else contract.down
+        current_price = self._side_price(side_label)
+        best_bid = self.trader.get_best_bid(token.token_id)
+
+        if purpose == "tp":
+            return TP_PRICE
+
+        if best_bid is not None and best_bid > 0:
+            return round(max(HEDGE_SALVAGE_MIN_PRICE, min(0.25, best_bid)), 2)
+        return self._salvage_price_for(side_label)
+
+    def _reconcile_exit_orders(self, contract: ActiveContract, open_ids: set[str]) -> None:
+        now = time.time()
+        for side_label, managed in list(self._exit_orders_by_side.items()):
+            if managed.order_id not in open_ids:
+                continue
+            if managed.cancel_requested_at is not None:
+                continue
+            age = now - managed.placed_at
+            if age < EXIT_RECONCILE_INTERVAL_SECONDS:
+                continue
+            token = contract.up if side_label == "UP" else contract.down
+            live_balance = int(self.trader.token_balance(token.token_id))
+            desired_price = self._desired_exit_price(contract, side_label, managed.purpose)
+            if live_balance < 1:
+                continue
+            if managed.shares == live_balance and abs(managed.price - desired_price) < 0.001:
+                managed.placed_at = now
+                continue
+            self._cancel_order_safe(managed.order_id, reason=f"exit-reconcile-{managed.purpose}")
+            managed.cancel_requested_at = now
+            LOGGER.info(
+                "[EXIT RECONCILE] %s | side=%s | purpose=%s | old_shares=%d | new_shares=%d | old=$%.2f | new=$%.2f | age=%.1fs",
+                contract.slug,
+                side_label,
+                managed.purpose,
+                managed.shares,
+                live_balance,
+                managed.price,
+                desired_price,
+                age,
+            )
+
+    def _force_late_exit_cleanup(self, contract: ActiveContract) -> None:
+        seconds_remaining = max(0.0, contract.end_time.timestamp() - time.time())
+        if seconds_remaining > self.config.force_exit_before_end_seconds:
+            return
+        for side_label, token in (("UP", contract.up), ("DOWN", contract.down)):
+            if side_label in self._fully_exited_sides:
+                continue
+            balance = self.trader.token_balance(token.token_id)
+            if balance < 1:
+                continue
+            active = self._exit_orders_by_side.get(side_label)
+            if active is not None:
+                if active.cancel_requested_at is None:
+                    self._cancel_order_safe(active.order_id, reason="force-exit-cleanup")
+                    active.cancel_requested_at = time.time()
+                    LOGGER.info(
+                        "[FORCE EXIT WAIT] %s | side=%s | waiting for tp cancel before cleanup",
+                        contract.slug,
+                        side_label,
+                    )
+                continue
+            emergency_price = self._desired_exit_price(contract, side_label, "salvage")
+            try:
+                resp = self.trader.place_marketable_sell(token, emergency_price, round(balance, 4))
+                order_id = str(resp.get("orderID") or resp.get("id") or "")
+                LOGGER.info(
+                    "[FORCE EXIT] %s | side=%s | price=$%.2f | shares=%.4f | order=%s",
+                    contract.slug,
+                    side_label,
+                    emergency_price,
+                    balance,
+                    order_id[:16] if order_id else "n/a",
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "[FORCE EXIT FAILED] %s | side=%s | price=$%.2f | shares=%.4f | %s",
+                    contract.slug,
+                    side_label,
+                    emergency_price,
+                    balance,
+                    exc,
+                )
+
     def _ensure_exit_sell(self, contract: ActiveContract, side_label: str, price: float, purpose: str) -> None:
         if side_label in self._fully_exited_sides:
             return
         active = self._exit_orders_by_side.get(side_label)
-        if active is not None and active.purpose == purpose:
+        if active is not None:
             return
 
         token = contract.up if side_label == "UP" else contract.down
         balance = self.trader.token_balance(token.token_id)
         size = int(balance)
-        if size < 5:
+        if size < 1:
             LOGGER.info(
-                "[EXIT SKIP] %s | side=%s | purpose=%s | balance=%.4f < 5 shares",
+                "[EXIT SKIP] %s | side=%s | purpose=%s | balance=%.4f < 1 share",
                 contract.slug,
                 side_label,
                 purpose,
                 balance,
             )
-            if balance < 5:
+            if balance < 1:
                 self._fully_exited_sides.add(side_label)
             return
 
@@ -1120,6 +1393,7 @@ class Btc15RedeemEngine:
                 purpose=purpose,
                 price=price,
                 shares=size,
+                placed_at=time.time(),
             )
 
     def _place_take_profit_sell(
@@ -1133,7 +1407,7 @@ class Btc15RedeemEngine:
     ) -> str | None:
         attempt_size = size
         attempts = 0
-        while attempt_size >= 5 and attempts < 8:
+        while attempt_size >= 1 and attempts < 8:
             attempts += 1
             try:
                 resp = self.trader.place_limit_sell(token, price, attempt_size)
@@ -1173,7 +1447,7 @@ class Btc15RedeemEngine:
                     if share_state is not None
                     else "",
                 )
-                if share_state is not None and share_state["available_whole_shares"] < 5:
+                if share_state is not None and share_state["available_whole_shares"] < 1:
                     LOGGER.info(
                         "[EXIT HOLD] %s | side=%s | purpose=%s | only %.4f shares available outside matched orders; skipping re-place",
                         contract.slug,
@@ -1196,7 +1470,7 @@ class Btc15RedeemEngine:
 
     def _next_tp_attempt_size(self, error_text: str, current_size: int) -> int | None:
         available_size = self._available_tp_size_from_error(error_text, current_size)
-        if available_size is not None and available_size >= 5:
+        if available_size is not None and available_size >= 1:
             return available_size
 
         numbers = [int(match) for match in re.findall(r"(?<![\d.])(\d+)(?![\d.])", error_text)]
@@ -1318,7 +1592,11 @@ class Btc15RedeemEngine:
     def _choose_primary_side_scored(self) -> tuple[str, float, float]:
         up_score = self._score_side("UP")
         down_score = self._score_side("DOWN")
-        flip = self.config.strategy_primary_flip_threshold
+        flip = (
+            self._s0_profile_value("primary_flip_threshold")
+            if self._strategy_mode_strategy_0()
+            else self.config.strategy_primary_flip_threshold
+        )
         if self._strategy_primary_side is not None:
             current = up_score if self._strategy_primary_side == "UP" else down_score
             other = down_score if self._strategy_primary_side == "UP" else up_score
@@ -1326,6 +1604,11 @@ class Btc15RedeemEngine:
                 return self._strategy_primary_side, up_score, down_score
         self._strategy_primary_side = "UP" if up_score >= down_score else "DOWN"
         return self._strategy_primary_side, up_score, down_score
+
+    def _s0_profile_value(self, key: str) -> float:
+        profile = self._s0_meta_profile or S0_META_BASELINE
+        value = profile.get(key)
+        return float(value) if value is not None else 0.0
 
     def _score_side(self, side_label: str) -> float:
         current = self._last_up_price if side_label == "UP" else self._last_down_price
@@ -1404,6 +1687,140 @@ class Btc15RedeemEngine:
             return None
         return "UP" if up_price > down_price else "DOWN"
 
+    def _s0_elapsed_price_rows(self, max_elapsed: int) -> list[PricePoint]:
+        if self._window_start_ts <= 0:
+            return []
+        cutoff_ts = self._window_start_ts + max_elapsed
+        return [point for point in self._price_history if point.ts <= cutoff_ts]
+
+    def _s0_elapsed_btc_rows(self, max_elapsed: int) -> list[BtcPricePoint]:
+        if self._window_start_ts <= 0:
+            return []
+        cutoff_ts = self._window_start_ts + max_elapsed
+        return [point for point in self._btc_price_history if point.ts <= cutoff_ts]
+
+    def _s0_sum_quote_volume(self, max_elapsed: int) -> float:
+        return sum(float(point.quote_volume or 0.0) for point in self._s0_elapsed_btc_rows(max_elapsed))
+
+    def _s0_peak_quote_ratio_5_180(self) -> float:
+        quote_vals = [float(point.quote_volume or 0.0) for point in self._s0_elapsed_btc_rows(180)]
+        if not quote_vals:
+            return 0.0
+        width = 5
+        running = 0.0
+        best = 0.0
+        for idx, value in enumerate(quote_vals):
+            running += value
+            if idx >= width:
+                running -= quote_vals[idx - width]
+            if idx >= width - 1 and running > best:
+                best = running
+        avg = sum(quote_vals) / max(1.0, len(quote_vals) / width)
+        return best / max(1e-9, avg)
+
+    def _s0_btc_range_120(self) -> float:
+        rows = [point.price for point in self._s0_elapsed_btc_rows(120) if point.price > 0]
+        if len(rows) < 2 or rows[0] <= 0:
+            return 0.0
+        return (max(rows) - min(rows)) / rows[0]
+
+    def _s0_early_features(self) -> dict[str, float]:
+        price_rows_180 = self._s0_elapsed_price_rows(180)
+        early_leads = [abs(point.up_price - point.down_price) for point in price_rows_180]
+        early_mid_balance_secs = sum(1 for point in price_rows_180 if abs(point.up_price - point.down_price) <= 0.06)
+        return {
+            "early_lead_avg": (sum(early_leads) / len(early_leads)) if early_leads else 0.0,
+            "quote_total_120": self._s0_sum_quote_volume(120),
+            "peak_quote_ratio_5_180": self._s0_peak_quote_ratio_5_180(),
+            "btc_range_120": self._s0_btc_range_120(),
+            "early_mid_balance_secs": float(early_mid_balance_secs),
+        }
+
+    def _s0_choose_meta_action(self, elapsed: float) -> str | None:
+        if self._s0_meta_action is not None:
+            return self._s0_meta_action
+        if elapsed < S0_META_DECISION_DELAY_SECONDS:
+            return None
+
+        features = self._s0_early_features()
+        early_lead_avg = float(features["early_lead_avg"])
+        quote_total_120 = float(features["quote_total_120"])
+        peak_quote_ratio_5_180 = float(features["peak_quote_ratio_5_180"])
+        btc_range_120 = float(features["btc_range_120"])
+        early_mid_balance_secs = int(features["early_mid_balance_secs"])
+
+        if early_lead_avg <= 0.23320441988950277:
+            if quote_total_120 <= 1079767.5516235:
+                if quote_total_120 <= 325108.6770675:
+                    if peak_quote_ratio_5_180 <= 4.27854932672317:
+                        action = "H5"
+                    elif peak_quote_ratio_5_180 <= 9.182846333983301:
+                        action = "local_172"
+                    else:
+                        action = "filtered"
+                else:
+                    if btc_range_120 <= 0.00037842668751906497:
+                        if peak_quote_ratio_5_180 <= 10.600512119638067:
+                            action = "H2"
+                        else:
+                            action = "H1"
+                    elif early_lead_avg <= 0.20038674033149173:
+                        action = "local_153"
+                    else:
+                        action = "local_172"
+            else:
+                if early_lead_avg <= 0.0958011049723757:
+                    action = "H2" if peak_quote_ratio_5_180 <= 9.182846333983301 else "H5"
+                elif early_lead_avg <= 0.20038674033149173:
+                    action = "skip" if btc_range_120 <= 0.001094429907128999 else "local_172"
+                elif btc_range_120 <= 0.001338485459039942:
+                    action = "H5"
+                else:
+                    action = "filtered"
+        else:
+            if peak_quote_ratio_5_180 <= 5.816636653896287:
+                if early_lead_avg <= 0.2854696132596685:
+                    action = "H2"
+                elif early_mid_balance_secs <= 0:
+                    action = "local_153"
+                else:
+                    action = "filtered"
+            else:
+                if quote_total_120 <= 818659.4879733:
+                    action = "robust" if quote_total_120 <= 545077.0388798 else "H5"
+                elif early_mid_balance_secs <= 14:
+                    action = "skip" if quote_total_120 <= 3596079.4533483 else "H5"
+                elif quote_total_120 <= 2611394.6330247:
+                    action = "filtered"
+                else:
+                    action = "baseline"
+
+        self._s0_meta_action = action
+        profiles: dict[str, dict[str, float | str]] = {
+            "baseline": S0_META_BASELINE,
+            "local_172": S0_META_LOCAL_172,
+            "local_153": S0_META_LOCAL_153,
+            "filtered": S0_META_FILTERED,
+            "H5": S0_META_H5,
+            "robust": S0_META_ROBUST,
+            "deep064": S0_META_DEEP064,
+            "H2": S0_META_H2,
+            "H1": S0_META_H1,
+        }
+        self._s0_meta_profile = profiles.get(action)
+        LOGGER.info(
+            "[S0 META] %s | action=%s | early_lead_avg=%.4f | quote_total_120=%.2f | peak_quote_ratio_5_180=%.3f | "
+            "btc_range_120=%.6f | early_mid_balance_secs=%d",
+            self._current_window_slug,
+            action,
+            early_lead_avg,
+            quote_total_120,
+            peak_quote_ratio_5_180,
+            btc_range_120,
+            early_mid_balance_secs,
+        )
+        return self._s0_meta_action
+
     def _choose_strategy_0_candidate(
         self,
         snapshot: BookSnapshot,
@@ -1413,6 +1830,33 @@ class Btc15RedeemEngine:
         """Primary/hedge redeem logic aligned with run_named_profiles ``strategy_0`` / price-history replay."""
         self._no_signal_reason = ""
         lot = self.config.shares_per_level
+        if elapsed < S0_META_DECISION_DELAY_SECONDS:
+            self._no_signal_reason = f"strategy_0 meta waiting for {S0_META_DECISION_DELAY_SECONDS}s decision window"
+            return None
+
+        action = self._s0_choose_meta_action(elapsed)
+        if action is None:
+            self._no_signal_reason = "strategy_0 meta decision pending"
+            return None
+        if action == "skip":
+            self._no_signal_reason = "strategy_0 meta skipped window"
+            return None
+
+        target_directional_ratio = self._s0_profile_value("target_directional_ratio")
+        target_guarantee_ratio = self._s0_profile_value("target_guarantee_ratio")
+        late_trend_start_seconds = self._s0_profile_value("late_trend_start_seconds")
+        primary_price_min = self._s0_profile_value("primary_price_min")
+        primary_price_max = self._s0_profile_value("primary_price_max")
+        primary_price_soft_max = self._s0_profile_value("primary_price_soft_max")
+        primary_price_hard_max = self._s0_profile_value("primary_price_hard_max")
+        hedge_max_price = self._s0_profile_value("hedge_max_price")
+        late_hedge_max_price = self._s0_profile_value("late_hedge_max_price")
+        primary_target_share = self._s0_profile_value("primary_target_share")
+        hedge_target_share = self._s0_profile_value("hedge_target_share")
+        late_repair_seconds = self._s0_profile_value("late_repair_seconds")
+        late_trend_target_share = self._s0_profile_value("late_trend_target_share")
+        late_trend_hedge_max_price = self._s0_profile_value("late_trend_hedge_max_price")
+        late_trend_min_win_pnl = self._s0_profile_value("late_trend_min_win_pnl")
 
         if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
             self._no_signal_reason = "waiting for both side prices"
@@ -1422,13 +1866,13 @@ class Btc15RedeemEngine:
             return None
         if (
             snapshot.total_spend > 0
-            and snapshot.directional_ratio >= S0_TARGET_DIRECTIONAL_RATIO
-            and snapshot.guarantee_ratio >= S0_TARGET_GUARANTEE_RATIO
+            and snapshot.directional_ratio >= target_directional_ratio
+            and snapshot.guarantee_ratio >= target_guarantee_ratio
         ):
             self._no_signal_reason = "coverage targets already met"
             return None
 
-        if elapsed >= S0_LATE_TREND_START_SECONDS:
+        if elapsed >= late_trend_start_seconds:
             trend_side = self._late_trend_side()
             if trend_side is not None:
                 trend_price = self._side_price(trend_side)
@@ -1441,28 +1885,28 @@ class Btc15RedeemEngine:
                 trend_if_win = snapshot.up_pnl_if_win if trend_side == "UP" else snapshot.down_pnl_if_win
                 pair_ok = snapshot.pair_avg_sum <= 1.03 or snapshot.guarantee_ratio >= 0.95
                 if (
-                    trend_price <= S0_PRIMARY_PRICE_SOFT_MAX
+                    trend_price <= primary_price_soft_max
                     and pair_ok
                     and (
                         trend_shares <= hedge_shares
-                        or trend_share_ratio < S0_LATE_TREND_TARGET_SHARE
-                        or trend_if_win < S0_LATE_TREND_MIN_WIN_PNL
+                        or trend_share_ratio < late_trend_target_share
+                        or trend_if_win < late_trend_min_win_pnl
                     )
                 ):
                     return OrderCandidate(
                         side_label=trend_side,
                         kind="primary",
                         reference_price=trend_price,
-                        limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, trend_price + 0.05),
+                        limit_ceiling=min(primary_price_hard_max, trend_price + 0.05),
                         reason="s0_late_winner_press",
                         shares=lot,
                     )
-                if hedge_price <= S0_LATE_TREND_HEDGE_MAX_PRICE and snapshot.guarantee_ratio < 0.92:
+                if hedge_price <= late_trend_hedge_max_price and snapshot.guarantee_ratio < 0.92:
                     return OrderCandidate(
                         side_label=hedge_side,
                         kind="hedge",
                         reference_price=hedge_price,
-                        limit_ceiling=min(S0_LATE_TREND_HEDGE_MAX_PRICE, hedge_price + 0.05),
+                        limit_ceiling=min(late_trend_hedge_max_price, hedge_price + 0.05),
                         reason="s0_late_trend_hedge",
                         shares=lot,
                     )
@@ -1471,12 +1915,12 @@ class Btc15RedeemEngine:
                     return None
 
         if snapshot.total_spend == 0:
-            if S0_PRIMARY_PRICE_MIN <= snapshot.primary_price <= S0_PRIMARY_PRICE_SOFT_MAX:
+            if primary_price_min <= snapshot.primary_price <= primary_price_soft_max:
                 return OrderCandidate(
                     side_label=snapshot.primary_side,
                     kind="primary",
                     reference_price=snapshot.primary_price,
-                    limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                    limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
                     reason="s0_initial_primary",
                     shares=lot,
                 )
@@ -1484,62 +1928,62 @@ class Btc15RedeemEngine:
             return None
 
         if (
-            seconds_remaining <= S0_LATE_REPAIR_SECONDS
+            seconds_remaining <= late_repair_seconds
             and snapshot.guarantee_ratio < 0.90
-            and snapshot.hedge_price <= S0_LATE_HEDGE_MAX_PRICE
+            and snapshot.hedge_price <= late_hedge_max_price
         ):
             return OrderCandidate(
                 side_label=snapshot.hedge_side,
                 kind="hedge",
                 reference_price=snapshot.hedge_price,
-                limit_ceiling=min(S0_LATE_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                limit_ceiling=min(late_hedge_max_price, snapshot.hedge_price + 0.05),
                 reason="s0_late_repair",
                 shares=lot,
             )
 
         if (
-            snapshot.primary_spend_share < S0_PRIMARY_TARGET_SHARE
-            and S0_PRIMARY_PRICE_MIN <= snapshot.primary_price <= S0_PRIMARY_PRICE_MAX
+            snapshot.primary_spend_share < primary_target_share
+            and primary_price_min <= snapshot.primary_price <= primary_price_max
         ):
             return OrderCandidate(
                 side_label=snapshot.primary_side,
                 kind="primary",
                 reference_price=snapshot.primary_price,
-                limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
                 reason="s0_build_primary",
                 shares=lot,
             )
 
         if (
-            snapshot.hedge_spend_share < S0_HEDGE_TARGET_SHARE
-            and snapshot.hedge_price <= S0_HEDGE_MAX_PRICE
+            snapshot.hedge_spend_share < hedge_target_share
+            and snapshot.hedge_price <= hedge_max_price
             and snapshot.guarantee_ratio < 0.95
         ):
             return OrderCandidate(
                 side_label=snapshot.hedge_side,
                 kind="hedge",
                 reference_price=snapshot.hedge_price,
-                limit_ceiling=min(S0_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                limit_ceiling=min(hedge_max_price, snapshot.hedge_price + 0.05),
                 reason="s0_cheap_hedge",
                 shares=lot,
             )
 
-        if snapshot.directional_ratio < S0_TARGET_DIRECTIONAL_RATIO and snapshot.primary_price <= S0_PRIMARY_PRICE_SOFT_MAX:
+        if snapshot.directional_ratio < target_directional_ratio and snapshot.primary_price <= primary_price_soft_max:
             return OrderCandidate(
                 side_label=snapshot.primary_side,
                 kind="primary",
                 reference_price=snapshot.primary_price,
-                limit_ceiling=min(S0_PRIMARY_PRICE_HARD_MAX, snapshot.primary_price + 0.05),
+                limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
                 reason="s0_coverage_primary",
                 shares=lot,
             )
 
-        if snapshot.guarantee_ratio < 0.85 and snapshot.hedge_price <= S0_LATE_HEDGE_MAX_PRICE:
+        if snapshot.guarantee_ratio < 0.85 and snapshot.hedge_price <= late_hedge_max_price:
             return OrderCandidate(
                 side_label=snapshot.hedge_side,
                 kind="hedge",
                 reference_price=snapshot.hedge_price,
-                limit_ceiling=min(S0_LATE_HEDGE_MAX_PRICE, snapshot.hedge_price + 0.05),
+                limit_ceiling=min(late_hedge_max_price, snapshot.hedge_price + 0.05),
                 reason="s0_repair_hedge",
                 shares=lot,
             )
@@ -1988,16 +2432,12 @@ class Btc15RedeemEngine:
             min(candidate.limit_ceiling, candidate.reference_price + self.config.strategy_price_buffer),
             2,
         )
-        reference_notional = estimated_limit * candidate.shares
-        if (
-            candidate.kind == "hedge"
-            and candidate.reference_price * candidate.shares < MIN_MARKETABLE_BUY_NOTIONAL
-        ):
-            self._no_signal_reason = (
-                f"hedge notional ${candidate.reference_price * candidate.shares:.2f} "
-                f"below ${MIN_MARKETABLE_BUY_NOTIONAL:.2f} venue minimum"
-            )
+        scaled_shares = self._scaled_order_shares(candidate.reference_price, candidate.shares, elapsed)
+        if scaled_shares <= 0:
+            self._no_signal_reason = "insufficient remaining budget for venue-min order"
             return False
+        candidate.shares = scaled_shares
+        reference_notional = estimated_limit * candidate.shares
 
         committed = self._up_spend + self._down_spend + sum(order.notional for order in self._order_map.values())
         if committed + reference_notional > phase_cap:
@@ -2134,6 +2574,32 @@ class Btc15RedeemEngine:
             if elapsed <= upper_bound:
                 return round(self._window_budget_usdc * share, 2)
         return self._window_budget_usdc
+
+    def _minimum_tradable_budget_usdc(self) -> float:
+        return MIN_MARKETABLE_BUY_NOTIONAL
+
+    def _has_tradable_budget(self) -> bool:
+        return self._window_budget_usdc >= self._minimum_tradable_budget_usdc()
+
+    def _minimum_order_shares(self, price: float) -> int:
+        safe_price = max(0.01, round(price, 2))
+        return max(1, int(math.ceil((MIN_MARKETABLE_BUY_NOTIONAL - 1e-9) / safe_price)))
+
+    def _scaled_order_shares(self, reference_price: float, requested_shares: int, elapsed: float) -> int:
+        estimated_limit = round(
+            min(0.99, max(0.01, reference_price + self.config.strategy_price_buffer)),
+            2,
+        )
+        min_shares = self._minimum_order_shares(estimated_limit)
+        committed = self._up_spend + self._down_spend + sum(order.notional for order in self._order_map.values())
+        remaining_budget = min(self._phase_cap_usdc(elapsed), self._window_budget_usdc) - committed
+        if remaining_budget <= 0:
+            return 0
+        affordable_shares = int((remaining_budget + 1e-9) // estimated_limit)
+        if affordable_shares < min_shares:
+            return 0
+        desired_shares = min(max(1, requested_shares), affordable_shares)
+        return max(min_shares, desired_shares)
 
     def _effective_budget(self, wallet_balance_usdc: float) -> float:
         if self.config.dry_run and wallet_balance_usdc <= 0:
