@@ -45,6 +45,7 @@ BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 HEDGE_PAIR_SUM_MAX = 0.90
 HEDGE_PAIR_SUM_MAX_RICH_ENTRY = 0.95
 HEDGE_MIN_LIMIT_PRICE = 0.01
+HEDGE_REBALANCE_INTERVAL_SECONDS = 5.0
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
     "btcagree_t525_lb180_m0.001",
@@ -193,6 +194,9 @@ class SignalAnalyzer:
         self._pending_tp: list[dict[str, float | int | str]] = []
         self._pending_hedges: list[dict[str, float | int | str]] = []
         self._active_hedge_orders: list[dict[str, float | int | str | bool]] = []
+        self._desired_hedge_shares: dict[str, int] = {"Up": 0, "Down": 0}
+        self._hedge_limit_by_side: dict[str, float] = {"Up": HEDGE_MIN_LIMIT_PRICE, "Down": HEDGE_MIN_LIMIT_PRICE}
+        self._hedge_tp_covered_shares: dict[str, int] = {"Up": 0, "Down": 0}
         self._buys_placed_up: int = 0
         self._buys_placed_down: int = 0
         self._max_buys_per_side: int = 0
@@ -200,6 +204,7 @@ class SignalAnalyzer:
         # If set (e.g. by tests/replay), used instead of wallet read for window caps.
         self._window_balance_override: float | None = None
         self._last_leftover_cleanup_ts: float = 0.0
+        self._last_hedge_rebalance_ts: float = 0.0
         self._signal_window_closed: bool = False
         self._early_pm_min: float | None = None
         self._early_pm_max: float | None = None
@@ -274,6 +279,7 @@ class SignalAnalyzer:
         if self._live:
             self._check_pending_hedges()
             self._manage_active_hedges()
+            self._rebalance_hedges(now)
             self._check_pending_tp()
             self._cleanup_small_leftovers(elapsed, now)
         if (
@@ -309,9 +315,13 @@ class SignalAnalyzer:
         self._pending_tp.clear()
         self._pending_hedges.clear()
         self._active_hedge_orders.clear()
+        self._desired_hedge_shares = {"Up": 0, "Down": 0}
+        self._hedge_limit_by_side = {"Up": HEDGE_MIN_LIMIT_PRICE, "Down": HEDGE_MIN_LIMIT_PRICE}
+        self._hedge_tp_covered_shares = {"Up": 0, "Down": 0}
         self._buys_placed_up = 0
         self._buys_placed_down = 0
         self._last_leftover_cleanup_ts = 0.0
+        self._last_hedge_rebalance_ts = 0.0
         self._signal_window_closed = False
         self._early_pm_min = None
         self._early_pm_max = None
@@ -406,25 +416,26 @@ class SignalAnalyzer:
             hedge_pair_sum_cap = self._hedge_pair_sum_cap(limit)
             hedge_limit = round(hedge_pair_sum_cap - limit, 2)
             if hedge_limit >= HEDGE_MIN_LIMIT_PRICE:
+                hedge_limit = float(max(HEDGE_MIN_LIMIT_PRICE, hedge_limit))
+                self._desired_hedge_shares[hedge_side] += CLIP
+                self._hedge_limit_by_side[hedge_side] = max(self._hedge_limit_by_side[hedge_side], hedge_limit)
                 self._pending_hedges.append(
                     {
                         "pattern": name,
                         "primary_side": side,
                         "hedge_side": hedge_side,
                         "shares": CLIP,
-                        "primary_min_balance": float(CLIP),
-                        "primary_buy_limit": float(limit),
-                        "hedge_pair_sum_cap": float(hedge_pair_sum_cap),
-                        "hedge_limit": float(max(HEDGE_MIN_LIMIT_PRICE, hedge_limit)),
+                        "hedge_limit": hedge_limit,
                     }
                 )
+                self._check_pending_hedges()
                 SIGLOG.info(
                     "[SIGNAL] hedge queued %s | primary=%s @ %.2f | hedge=%s bid @ %.2f x%d | pair_cap=%.2f | window=%s",
                     name,
                     side,
                     limit,
                     hedge_side,
-                    max(HEDGE_MIN_LIMIT_PRICE, hedge_limit),
+                    hedge_limit,
                     CLIP,
                     hedge_pair_sum_cap,
                     self._window_slug,
@@ -439,16 +450,10 @@ class SignalAnalyzer:
             return
         remaining: list[dict[str, float | int | str]] = []
         for hedge in self._pending_hedges:
-            primary_side = str(hedge["primary_side"])
             hedge_side = str(hedge["hedge_side"])
             shares = int(hedge["shares"])
-            primary_token = self._get_token(primary_side)
             hedge_token = self._get_token(hedge_side)
-            if primary_token is None or hedge_token is None:
-                remaining.append(hedge)
-                continue
-            primary_balance = self._trader.token_balance(primary_token.token_id)
-            if primary_balance + 1e-9 < float(hedge["primary_min_balance"]):
+            if hedge_token is None:
                 remaining.append(hedge)
                 continue
             try:
@@ -458,10 +463,9 @@ class SignalAnalyzer:
                     {
                         "order_id": str(order_id),
                         "pattern": str(hedge["pattern"]),
-                        "primary_side": primary_side,
-                        "hedge_side": hedge_side,
+                        "side": hedge_side,
                         "shares": shares,
-                        "tp_queued": False,
+                        "limit": float(hedge["hedge_limit"]),
                     }
                 )
                 SIGLOG.info(
@@ -486,44 +490,87 @@ class SignalAnalyzer:
         self._pending_hedges = remaining
 
     def _manage_active_hedges(self) -> None:
-        if not self._active_hedge_orders:
-            return
-        remaining: list[dict[str, float | int | str | bool]] = []
-        for hedge in self._active_hedge_orders:
-            primary_side = str(hedge["primary_side"])
-            hedge_side = str(hedge["hedge_side"])
-            shares = int(hedge["shares"])
-            primary_token = self._get_token(primary_side)
-            hedge_token = self._get_token(hedge_side)
-            if primary_token is None or hedge_token is None:
-                remaining.append(hedge)
+        for side in ("Up", "Down"):
+            token = self._get_token(side)
+            if token is None:
                 continue
-            primary_balance = self._trader.token_balance(primary_token.token_id)
-            hedge_balance = self._trader.token_balance(hedge_token.token_id)
-            if hedge_balance + 1e-9 >= shares and not bool(hedge["tp_queued"]):
+            balance = self._trader.token_balance(token.token_id)
+            covered = self._hedge_tp_covered_shares[side]
+            hedge_balance_shares = int(balance // CLIP) * CLIP
+            new_cover = hedge_balance_shares - covered
+            if new_cover >= CLIP:
                 self._pending_tp.append(
                     {
-                        "side": hedge_side,
-                        "shares": shares,
-                        "min_balance": float(shares),
+                        "side": side,
+                        "shares": int(new_cover),
+                        "min_balance": float(covered + new_cover),
                     }
                 )
-                hedge["tp_queued"] = True
+                self._hedge_tp_covered_shares[side] += int(new_cover)
                 SIGLOG.info(
-                    "[SIGNAL] HEDGE filled %s | %s balance=%.4f >= %d | TP queued | window=%s",
-                    hedge["pattern"],
-                    hedge_side,
-                    hedge_balance,
-                    shares,
+                    "[SIGNAL] HEDGE balance detected | %s balance=%.4f | TP queued x%d | window=%s",
+                    side,
+                    balance,
+                    int(new_cover),
                     self._window_slug,
                 )
-            if primary_balance < 0.5 and hedge_balance < 0.5:
-                order_id = str(hedge["order_id"])
+
+        remaining: list[dict[str, float | int | str | bool]] = []
+        for hedge in self._active_hedge_orders:
+            side = str(hedge["side"])
+            token = self._get_token(side)
+            if token is None:
+                remaining.append(hedge)
+                continue
+            balance = self._trader.token_balance(token.token_id)
+            desired = self._desired_hedge_shares.get(side, 0)
+            if balance + 1e-9 >= desired and desired > 0:
+                order_id = str(hedge.get("order_id") or "")
                 if order_id and order_id != "?":
                     self._trader.cancel_order(order_id)
                 continue
             remaining.append(hedge)
         self._active_hedge_orders = remaining
+
+    def _pending_hedge_shares(self, side: str) -> int:
+        total = 0
+        for hedge in self._pending_hedges:
+            if str(hedge["hedge_side"]) == side:
+                total += int(hedge["shares"])
+        for hedge in self._active_hedge_orders:
+            if str(hedge["side"]) == side:
+                total += int(hedge["shares"])
+        return total
+
+    def _rebalance_hedges(self, now: float) -> None:
+        if now - self._last_hedge_rebalance_ts < HEDGE_REBALANCE_INTERVAL_SECONDS:
+            return
+        self._last_hedge_rebalance_ts = now
+        for side in ("Up", "Down"):
+            desired = self._desired_hedge_shares.get(side, 0)
+            if desired <= 0:
+                continue
+            token = self._get_token(side)
+            if token is None:
+                continue
+            balance = self._trader.token_balance(token.token_id)
+            covered = int(balance // CLIP) * CLIP + self._pending_hedge_shares(side)
+            gap = desired - covered
+            if gap < CLIP:
+                continue
+            hedge_limit = max(HEDGE_MIN_LIMIT_PRICE, float(self._hedge_limit_by_side.get(side, HEDGE_MIN_LIMIT_PRICE)))
+            while gap >= CLIP:
+                self._pending_hedges.append(
+                    {
+                        "pattern": "rebalance",
+                        "primary_side": "Down" if side == "Up" else "Up",
+                        "hedge_side": side,
+                        "shares": CLIP,
+                        "hedge_limit": hedge_limit,
+                    }
+                )
+                gap -= CLIP
+            self._check_pending_hedges()
 
     def _check_pending_tp(self) -> None:
         if not self._pending_tp:
