@@ -42,6 +42,8 @@ SIGNAL_WINDOW_CLOSE_PRICE = 0.98
 EARLY_WINDOW_SKIP_CHECK_ELAPSED = 120.0
 EARLY_WINDOW_SKIP_PM_RANGE = 0.60
 BTC_VOLUME_OK_LOOKBACK_POINTS = 30
+HEDGE_PAIR_SUM_MAX = 0.90
+HEDGE_MIN_LIMIT_PRICE = 0.01
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
     "btcagree_t525_lb180_m0.001",
@@ -50,6 +52,8 @@ ACTIVE_SIGNAL_NAMES: set[str] = {
     "btcrev_t510_lb180_r0.002",
     "lbounce_t585_r30_f30_rm003_fm006",
     "ratio_t720_ge4",
+    "rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4",
+    "rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84",
     "rddrecov_t360_dd0.15_r0.75",
     "rddrecov_t360_dd0.2_r0.75",
     "spread_squeeze_t720_drop20",
@@ -150,6 +154,8 @@ PATTERN_ENTRY_RISK_BLOCKERS: dict[str, tuple[str, ...]] = {
     "accum_t615_b20_n3": ("btcmoveabs120_gt_0.0012", "btcmoveabs90_gt_0.0012", "price_gt_0.85", "elapsed_ge_613.0"),
     "nf_quietlead_t630_lb60_r0.0006_l0.22_d0.62": ("elapsed_ge_629.0", "losermove60_ge_-0.3684210526"),
     "nf_breakquiet_t630_pre45_post60_pr0.02_mv0.06_r0.0006": ("tradesratio5_30_lt_0.1061946903", "losermove60_lt_-0.5333333333", "base60_gt_9.4374", "tradesratio5_30_gt_2.1823834197"),
+    "rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84": ("btcmove30_lt_-0.0002250055", "btcmove90_lt_-0.0003842727"),
+    "rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4": ("btcmove120_lt_-0.0006421542", "base15_lt_0.29407"),
     "mix_loserdrop_t690_w30_v0.002_br60_0.0008": ("rebound_ge_120_0.0004", "tradesratio1_5_gt_3.0"),
     "flipband_t720_0to1": ("btcmoveabs180_gt_0.0004", "sidemove30_gt_0.1904761905"),
 }
@@ -183,7 +189,9 @@ class SignalAnalyzer:
         self._loser_at_60: float | None = None
         self._dom_at_60: str | None = None
         self._last_order_ts: float = 0.0
-        self._pending_tp: list[tuple[str, int]] = []
+        self._pending_tp: list[dict[str, float | int | str]] = []
+        self._pending_hedges: list[dict[str, float | int | str]] = []
+        self._active_hedge_orders: list[dict[str, float | int | str | bool]] = []
         self._buys_placed_up: int = 0
         self._buys_placed_down: int = 0
         self._max_buys_per_side: int = 0
@@ -263,6 +271,8 @@ class SignalAnalyzer:
             self._dom_at_60 = cur_dom
 
         if self._live:
+            self._check_pending_hedges()
+            self._manage_active_hedges()
             self._check_pending_tp()
             self._cleanup_small_leftovers(elapsed, now)
         if (
@@ -285,6 +295,7 @@ class SignalAnalyzer:
         self._eval_patterns(snap, elapsed, cur_dom)
 
     def _reset_window(self, slug: str, start_ts: float) -> None:
+        self._cancel_active_hedge_orders()
         self._window_slug = slug
         self._window_start_ts = start_ts
         self._history.clear()
@@ -295,6 +306,8 @@ class SignalAnalyzer:
         self._loser_at_60 = None
         self._dom_at_60 = None
         self._pending_tp.clear()
+        self._pending_hedges.clear()
+        self._active_hedge_orders.clear()
         self._buys_placed_up = 0
         self._buys_placed_down = 0
         self._last_leftover_cleanup_ts = 0.0
@@ -376,20 +389,148 @@ class SignalAnalyzer:
                 self._max_buys_per_side,
                 self._window_slug,
             )
-            self._pending_tp.append((side, CLIP))
+            self._pending_tp.append(
+                {
+                    "side": side,
+                    "shares": CLIP,
+                    "min_balance": float(CLIP),
+                }
+            )
+            hedge_side = "Down" if side == "Up" else "Up"
+            hedge_limit = round(HEDGE_PAIR_SUM_MAX - limit, 2)
+            if hedge_limit >= HEDGE_MIN_LIMIT_PRICE:
+                self._pending_hedges.append(
+                    {
+                        "pattern": name,
+                        "primary_side": side,
+                        "hedge_side": hedge_side,
+                        "shares": CLIP,
+                        "primary_min_balance": float(CLIP),
+                        "primary_buy_limit": float(limit),
+                        "hedge_limit": float(max(HEDGE_MIN_LIMIT_PRICE, hedge_limit)),
+                    }
+                )
+                SIGLOG.info(
+                    "[SIGNAL] hedge queued %s | primary=%s @ %.2f | hedge=%s bid @ %.2f x%d | pair_cap=%.2f | window=%s",
+                    name,
+                    side,
+                    limit,
+                    hedge_side,
+                    max(HEDGE_MIN_LIMIT_PRICE, hedge_limit),
+                    CLIP,
+                    HEDGE_PAIR_SUM_MAX,
+                    self._window_slug,
+                )
             return True
         except Exception as exc:
             SIGLOG.error("[SIGNAL] BUY FAILED %s | %s @ %.2f | %s", name, side, limit, exc)
             return False
 
+    def _check_pending_hedges(self) -> None:
+        if not self._pending_hedges:
+            return
+        remaining: list[dict[str, float | int | str]] = []
+        for hedge in self._pending_hedges:
+            primary_side = str(hedge["primary_side"])
+            hedge_side = str(hedge["hedge_side"])
+            shares = int(hedge["shares"])
+            primary_token = self._get_token(primary_side)
+            hedge_token = self._get_token(hedge_side)
+            if primary_token is None or hedge_token is None:
+                remaining.append(hedge)
+                continue
+            primary_balance = self._trader.token_balance(primary_token.token_id)
+            if primary_balance + 1e-9 < float(hedge["primary_min_balance"]):
+                remaining.append(hedge)
+                continue
+            try:
+                resp = self._trader.place_limit_buy(hedge_token, float(hedge["hedge_limit"]), shares)
+                order_id = resp.get("orderID") or resp.get("id") or "?"
+                self._active_hedge_orders.append(
+                    {
+                        "order_id": str(order_id),
+                        "pattern": str(hedge["pattern"]),
+                        "primary_side": primary_side,
+                        "hedge_side": hedge_side,
+                        "shares": shares,
+                        "tp_queued": False,
+                    }
+                )
+                SIGLOG.info(
+                    "[SIGNAL] HEDGE BUY placed %s | %s bid @ %.2f x%d | order=%s | window=%s",
+                    hedge["pattern"],
+                    hedge_side,
+                    float(hedge["hedge_limit"]),
+                    shares,
+                    order_id,
+                    self._window_slug,
+                )
+            except Exception as exc:
+                SIGLOG.debug(
+                    "[SIGNAL] HEDGE BUY failed %s | %s @ %.2f x%d: %s -- will retry",
+                    hedge["pattern"],
+                    hedge_side,
+                    float(hedge["hedge_limit"]),
+                    shares,
+                    exc,
+                )
+                remaining.append(hedge)
+        self._pending_hedges = remaining
+
+    def _manage_active_hedges(self) -> None:
+        if not self._active_hedge_orders:
+            return
+        remaining: list[dict[str, float | int | str | bool]] = []
+        for hedge in self._active_hedge_orders:
+            primary_side = str(hedge["primary_side"])
+            hedge_side = str(hedge["hedge_side"])
+            shares = int(hedge["shares"])
+            primary_token = self._get_token(primary_side)
+            hedge_token = self._get_token(hedge_side)
+            if primary_token is None or hedge_token is None:
+                remaining.append(hedge)
+                continue
+            primary_balance = self._trader.token_balance(primary_token.token_id)
+            hedge_balance = self._trader.token_balance(hedge_token.token_id)
+            if hedge_balance + 1e-9 >= shares and not bool(hedge["tp_queued"]):
+                self._pending_tp.append(
+                    {
+                        "side": hedge_side,
+                        "shares": shares,
+                        "min_balance": float(shares),
+                    }
+                )
+                hedge["tp_queued"] = True
+                SIGLOG.info(
+                    "[SIGNAL] HEDGE filled %s | %s balance=%.4f >= %d | TP queued | window=%s",
+                    hedge["pattern"],
+                    hedge_side,
+                    hedge_balance,
+                    shares,
+                    self._window_slug,
+                )
+            if primary_balance < 0.5 and hedge_balance < 0.5:
+                order_id = str(hedge["order_id"])
+                if order_id and order_id != "?":
+                    self._trader.cancel_order(order_id)
+                continue
+            remaining.append(hedge)
+        self._active_hedge_orders = remaining
+
     def _check_pending_tp(self) -> None:
         if not self._pending_tp:
             return
-        remaining: list[tuple[str, int]] = []
-        for side, shares in self._pending_tp:
+        remaining: list[dict[str, float | int | str]] = []
+        for item in self._pending_tp:
+            side = str(item["side"])
+            shares = int(item["shares"])
             token = self._get_token(side)
             if token is None:
-                remaining.append((side, shares))
+                remaining.append(item)
+                continue
+            balance = self._trader.token_balance(token.token_id)
+            if balance + 1e-9 < float(item["min_balance"]):
+                remaining.append(item)
                 continue
             try:
                 resp = self._trader.place_limit_sell(token, TP_PRICE, shares)
@@ -400,8 +541,16 @@ class SignalAnalyzer:
                 )
             except Exception as exc:
                 SIGLOG.debug("[SIGNAL] TP SELL failed %s x%d: %s -- will retry", side, shares, exc)
-                remaining.append((side, shares))
+                remaining.append(item)
         self._pending_tp = remaining
+
+    def _cancel_active_hedge_orders(self) -> None:
+        if not self._active_hedge_orders or self._trader is None:
+            return
+        for hedge in self._active_hedge_orders:
+            order_id = str(hedge.get("order_id") or "")
+            if order_id and order_id != "?":
+                self._trader.cancel_order(order_id)
 
     def _btc_data_ok(self) -> bool:
         eng = self._engine
@@ -741,6 +890,14 @@ class SignalAnalyzer:
         if start is None or end is None:
             return None
         return self._dom_price(end) - self._dom_price(start)
+
+    def _dom_streak_seconds(self, current_side: str) -> float:
+        streak = 0.0
+        for snap in reversed(self._history):
+            if self._dom_side(snap) != current_side:
+                break
+            streak += 1.0
+        return streak
 
     def _btc_accel(self, end_elapsed: float, lookback_seconds: float) -> float | None:
         if end_elapsed < 2 * lookback_seconds:
@@ -1709,7 +1866,57 @@ class SignalAnalyzer:
                     f"lead={lead:.3f} btc_rng60={btc_rng60:.4%}",
                 )
 
-        # 68. btcacc_t600_lb20_a0.0002_d0.004
+        # 69. rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84
+        if 478 <= elapsed <= 485 and d_px <= 0.84 and l_px > 0.01:
+            old = self._snap_near(420, tolerance=25.0)
+            btc_rng60 = self._btc_range(elapsed, 60)
+            ratio_now = d_px / l_px
+            if old is not None and btc_rng60 is not None and btc_rng60 <= 0.0016:
+                old_loser = self._loser_price(old)
+                if old_loser > 0.01:
+                    old_ratio = self._dom_price(old) / old_loser
+                    if ratio_now >= 1.25 and (ratio_now - old_ratio) >= 0.10:
+                        self._fire(
+                            "rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84",
+                            dom,
+                            d_px,
+                            "88%",
+                            "+$0.88",
+                            f"ratio={ratio_now:.2f} gain={ratio_now - old_ratio:.2f} btc_rng60={btc_rng60:.4%}",
+                        )
+
+        # 70. rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4
+        if 493 <= elapsed <= 500 and l_px > 0.01:
+            streak = self._dom_streak_seconds(dom)
+            btc_m30 = self._btc_move(elapsed, 30)
+            dom_m30 = self._dom_move(elapsed - 30.0, elapsed)
+            old = self._snap_near(elapsed - 30.0, tolerance=15.0)
+            ratio_now = d_px / l_px
+            if (
+                streak >= 30.0
+                and btc_m30 is not None
+                and abs(btc_m30) <= 0.0016
+                and dom_m30 is not None
+                and dom_m30 >= 0.05
+                and ratio_now >= 1.4
+                and old is not None
+            ):
+                loser_side = "Down" if dom == "Up" else "Up"
+                loser_start = self._side_price(old, loser_side)
+                loser_end = self._side_price(snap, loser_side)
+                if loser_start > 0:
+                    loser_fade = (loser_end - loser_start) / loser_start
+                    if loser_fade <= -0.01:
+                        self._fire(
+                            "rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4",
+                            dom,
+                            d_px,
+                            "93%",
+                            "+$0.75",
+                            f"streak={streak:.0f}s dom_m30={dom_m30:.3f} loser_fade={loser_fade:.2%} ratio={ratio_now:.2f}",
+                        )
+
+        # 71. btcacc_t600_lb20_a0.0002_d0.004
         if 598 <= elapsed <= 605:
             btc_m1 = self._btc_move(elapsed - 20.0, 20)
             btc_m2 = self._btc_move(elapsed, 20)
