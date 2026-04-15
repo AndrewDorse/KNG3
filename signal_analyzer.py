@@ -22,6 +22,7 @@ Win$ = avg profit on correct pick.  Loss$ = avg loss on wrong pick.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -47,7 +48,7 @@ HEDGE_PAIR_SUM_MAX_RICH_ENTRY = 0.95
 HEDGE_MIN_LIMIT_PRICE = 0.01
 HEDGE_REBALANCE_INTERVAL_SECONDS = 5.0
 
-ACTIVE_SIGNAL_NAMES: set[str] = {
+LIVE_READY_SIGNAL_NAMES: set[str] = {
     "btcagree_t525_lb180_m0.001",
     "btcagree_t525_lb180_m0.001_l0.05",
     "btcsqz_t525_lb90_r0.0006_l0.4",
@@ -61,6 +62,18 @@ ACTIVE_SIGNAL_NAMES: set[str] = {
     "spread_squeeze_t720_drop20",
     "spread_t720_ge06",
 }
+
+WALLET_PRINCIPLES_SIGNAL_NAMES: set[str] = {
+    "rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4",
+    "rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84",
+}
+
+SIGNAL_PRESETS: dict[str, set[str]] = {
+    "live_ready": LIVE_READY_SIGNAL_NAMES,
+    "wallet_principles": WALLET_PRINCIPLES_SIGNAL_NAMES,
+}
+
+ACTIVE_SIGNAL_NAMES: set[str] = set(LIVE_READY_SIGNAL_NAMES)
 
 CANDIDATE_SIGNAL_NAMES: set[str] = {
     "btcsqz_t645_lb90_r0.0006_l0.4",
@@ -174,12 +187,14 @@ class _PriceSnap:
 class SignalAnalyzer:
     """Observes engine state, fires live buy orders + TP sells on pattern signals."""
 
-    def __init__(self) -> None:
+    def __init__(self, signal_preset: str | None = None) -> None:
         self._engine = None
         self._trader = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._signal_preset = (signal_preset or os.getenv("BOT_SIGNAL_PRESET", "live_ready")).strip().lower()
+        self._active_signal_names = self._resolve_signal_preset(self._signal_preset)
 
         self._window_slug: str | None = None
         self._window_start_ts: float = 0.0
@@ -212,6 +227,9 @@ class SignalAnalyzer:
         self._btc_missing_logged: bool = False
         self._btc_volume_missing_logged: bool = False
 
+    def _resolve_signal_preset(self, preset_name: str) -> set[str]:
+        return set(SIGNAL_PRESETS.get(preset_name, LIVE_READY_SIGNAL_NAMES))
+
     def attach(self, engine) -> None:
         self._engine = engine
         self._trader = engine.trader
@@ -219,8 +237,13 @@ class SignalAnalyzer:
         self._thread = threading.Thread(target=self._run, daemon=True, name="signal_analyzer")
         self._thread.start()
         mode_label = "LIVE -- orders enabled" if self._live else "log-only"
-        SIGLOG.info("[SIGNAL] analyzer thread started (%s) | %d patterns active", mode_label, len(ACTIVE_SIGNAL_NAMES))
-        SIGLOG.info("[SIGNAL] active signals: %s", ", ".join(sorted(ACTIVE_SIGNAL_NAMES)))
+        SIGLOG.info(
+            "[SIGNAL] analyzer thread started (%s) | preset=%s | %d patterns active",
+            mode_label,
+            self._signal_preset,
+            len(self._active_signal_names),
+        )
+        SIGLOG.info("[SIGNAL] active signals: %s", ", ".join(sorted(self._active_signal_names)))
 
     def stop(self) -> None:
         self._stop.set()
@@ -686,7 +709,7 @@ class SignalAnalyzer:
     # Signal fire (with live order)
     # ------------------------------------------------------------------
     def _fire(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> None:
-        if name not in ACTIVE_SIGNAL_NAMES:
+        if name not in self._active_signal_names:
             return
         if self._signal_window_closed:
             return

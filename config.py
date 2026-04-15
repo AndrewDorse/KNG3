@@ -34,7 +34,7 @@ class BotConfigError(RuntimeError):
 class BotConfig:
     private_key: str
     funder: str
-    bot_version: str = "2026-04-15 12:42:55"
+    bot_version: str = "2026-04-15 15:12:21"
     signature_type: int = 0
     dry_run: bool = True
     poll_interval_seconds: float = 1.0
@@ -78,6 +78,7 @@ class BotConfig:
     btc_feed_enabled: bool = True
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
+    signal_preset: str = "live_ready"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only
     strategy_mode: str = "signal_only"
 
@@ -125,7 +126,7 @@ class BotConfig:
         return cls(
             private_key=private_key,
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "2026-04-15 12:42:55").strip(),
+            bot_version=os.getenv("BOT_VERSION", "2026-04-15 15:12:21").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),
@@ -168,6 +169,7 @@ class BotConfig:
             btc_feed_enabled=_env_bool("BOT_BTC_FEED_ENABLED", True),
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
+            signal_preset=os.getenv("BOT_SIGNAL_PRESET", "live_ready").strip().lower(),
             strategy_mode=os.getenv("BOT_STRATEGY_MODE", "signal_only").strip().lower(),
         )
 

@@ -27,6 +27,7 @@ def main() -> int:
     LOGGER.info("version      = %s", config.bot_version)
     LOGGER.info("dry_run      = %s", config.dry_run)
     LOGGER.info("strategy_mode= %s", config.strategy_mode)
+    LOGGER.info("signal_preset= %s", config.signal_preset)
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)
     LOGGER.info("budget cap   = $%.2f", config.strategy_budget_cap_usdc)
@@ -42,7 +43,7 @@ def main() -> int:
     trader = PolymarketTrader(config)
     engine = Btc15RedeemEngine(config, locator, trader)
 
-    signals = SignalAnalyzer()
+    signals = SignalAnalyzer(signal_preset=config.signal_preset)
     signals.attach(engine)
     if config.strategy_mode == "signal_only":
         LOGGER.info("Signal analyzer attached (LIVE — placing orders on signals)")
