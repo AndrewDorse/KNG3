@@ -287,6 +287,7 @@ T10_ENTRY_MIN_PRICE = 0.05
 T10_ENTRY_MAX_PRICE = 0.95
 POSITION_MAX_PCT = 0.20
 POLY_MIN_LIMIT_SHARES = 5
+VOLUME_T10_FIXED_SHARES = 6
 MAKER_FEE_RATE_BPS = 50
 MAKER_PRICE_TICK = 0.01
 VOLUME_T10_TP_START_SECONDS_REMAINING = 60.0
@@ -993,7 +994,7 @@ class Btc15RedeemEngine:
             LOGGER.info(
                 "[STRATEGY PARAMS] %s | profile=%s | volume_first=%ds-%ds ratio>%.2f | "
                 "volume_side=BTC_direction | t10_window=T-%ds..T-%ds | hybrid_exec=maker>=10s,maker>=5s,taker<5s | "
-                "tp_last_minute=$%.2f | min_btc_delta=%.4f | pair_sum<=%.2f | max_pos_pct=%.2f | min_shares=%d",
+                "tp_last_minute=$%.2f | min_btc_delta=%.4f | pair_sum<=%.2f | fixed_shares=%d | min_shares=%d | up_only=true",
                 contract.slug,
                 self._profile_label(),
                 int(VOLUME_ENTRY_MIN_ELAPSED_SECONDS),
@@ -1004,7 +1005,7 @@ class Btc15RedeemEngine:
                 TP_PRICE,
                 T10_MIN_BTC_DELTA,
                 T10_PAIR_SUM_TARGET,
-                POSITION_MAX_PCT,
+                VOLUME_T10_FIXED_SHARES,
                 POLY_MIN_LIMIT_SHARES,
             )
         else:
@@ -1903,10 +1904,8 @@ class Btc15RedeemEngine:
         return current / avg_prev
 
     def _volume_t10_target_shares(self, entry_price: float) -> int:
-        safe_price = max(0.01, entry_price)
-        position_notional = self._window_budget_usdc * POSITION_MAX_PCT
-        target = int(position_notional / safe_price)
-        return max(POLY_MIN_LIMIT_SHARES, target)
+        _ = entry_price
+        return VOLUME_T10_FIXED_SHARES
 
     def _wd_early_features(self) -> dict[str, float]:
         price_rows_180 = self._s0_elapsed_price_rows(WD_DECISION_DELAY_SECONDS)
@@ -1979,10 +1978,10 @@ class Btc15RedeemEngine:
                 self._no_signal_reason = "waiting for 30s BTC volume baseline"
                 return None
             if volume_ratio > VOLUME_RATIO_THRESHOLD:
-                if btc_return == 0:
-                    self._no_signal_reason = "volume spike but BTC direction is flat"
+                if btc_return <= 0:
+                    self._no_signal_reason = "volume spike but BTC direction is not UP"
                     return None
-                side_label = "UP" if btc_return > 0 else "DOWN"
+                side_label = "UP"
                 side_price = self._side_price(side_label)
                 if not (VOLUME_ENTRY_MIN_PRICE < side_price <= VOLUME_ENTRY_MAX_PRICE):
                     self._no_signal_reason = f"volume {side_label} price outside entry band"
@@ -2005,11 +2004,11 @@ class Btc15RedeemEngine:
         if not (T10_ENTRY_END_SECONDS_REMAINING <= seconds_remaining <= T10_ENTRY_START_SECONDS_REMAINING):
             self._no_signal_reason = "outside T10 entry window"
             return None
-        if abs(btc_return) < T10_MIN_BTC_DELTA:
-            self._no_signal_reason = "btc delta below T10 minimum"
+        if btc_return < T10_MIN_BTC_DELTA:
+            self._no_signal_reason = "btc delta below UP-only T10 minimum"
             return None
 
-        side_label = "UP" if btc_return > 0 else "DOWN"
+        side_label = "UP"
         entry_price = self._side_price(side_label)
         pair_sum = self._side_price("UP") + self._side_price("DOWN")
         if pair_sum > T10_PAIR_SUM_TARGET:

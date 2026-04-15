@@ -83,6 +83,8 @@ This mode runs:
 
 - volume-first entries from `60s` to `600s` using BTC volume spike + BTC direction
 - late T-10 hybrid execution from `20s` to `3s` remaining
+- live patch: hybrid entries are currently `UP`-only
+- live patch: hybrid entries use fixed `6` shares
 - max `1` trade per market
 
 The live runtime still uses the repo's existing poll-based BTC and order-book access, not a streaming L2 WebSocket plant.
