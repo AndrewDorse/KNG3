@@ -63,17 +63,20 @@ LIVE_READY_SIGNAL_NAMES: set[str] = {
     "spread_t720_ge06",
 }
 
+W1_SIGNAL_NAMES: set[str] = set(LIVE_READY_SIGNAL_NAMES)
+
 WALLET_PRINCIPLES_SIGNAL_NAMES: set[str] = {
     "rn_grindtrend_t495_b15_n2_dr0.05_lf-0.01_bc0.0016_ra1.4",
     "rn_ratioexpand_t480_lb60_r1.25_rg0.1_bc0.0016_dc0.84",
 }
 
 SIGNAL_PRESETS: dict[str, set[str]] = {
+    "w1": W1_SIGNAL_NAMES,
     "live_ready": LIVE_READY_SIGNAL_NAMES,
     "wallet_principles": WALLET_PRINCIPLES_SIGNAL_NAMES,
 }
 
-ACTIVE_SIGNAL_NAMES: set[str] = set(LIVE_READY_SIGNAL_NAMES)
+ACTIVE_SIGNAL_NAMES: set[str] = set(W1_SIGNAL_NAMES)
 
 CANDIDATE_SIGNAL_NAMES: set[str] = {
     "btcsqz_t645_lb90_r0.0006_l0.4",
@@ -193,7 +196,7 @@ class SignalAnalyzer:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._lock = threading.Lock()
-        self._signal_preset = (signal_preset or os.getenv("BOT_SIGNAL_PRESET", "live_ready")).strip().lower()
+        self._signal_preset = (signal_preset or os.getenv("BOT_SIGNAL_PRESET", "w1")).strip().lower()
         self._active_signal_names = self._resolve_signal_preset(self._signal_preset)
 
         self._window_slug: str | None = None

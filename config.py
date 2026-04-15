@@ -78,7 +78,7 @@ class BotConfig:
     btc_feed_enabled: bool = True
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
-    signal_preset: str = "live_ready"
+    signal_preset: str = "w1"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only
     strategy_mode: str = "signal_only"
 
@@ -169,7 +169,7 @@ class BotConfig:
             btc_feed_enabled=_env_bool("BOT_BTC_FEED_ENABLED", True),
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
-            signal_preset=os.getenv("BOT_SIGNAL_PRESET", "live_ready").strip().lower(),
+            signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
             strategy_mode=os.getenv("BOT_STRATEGY_MODE", "signal_only").strip().lower(),
         )
 

@@ -28,6 +28,10 @@ def main() -> int:
     LOGGER.info("dry_run      = %s", config.dry_run)
     LOGGER.info("strategy_mode= %s", config.strategy_mode)
     LOGGER.info("signal_preset= %s", config.signal_preset)
+    if config.signal_preset == "w1":
+        LOGGER.info("strategy preset= W1 (live-ready)")
+    else:
+        LOGGER.info("strategy preset= %s", config.signal_preset)
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)
     LOGGER.info("budget cap   = $%.2f", config.strategy_budget_cap_usdc)

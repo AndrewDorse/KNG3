@@ -69,7 +69,7 @@ Recommended:
 
 ## Strategy Note
 
-Default config is safe for a fresh container because `BOT_STRATEGY_MODE` defaults to `signal_only`.
+Default config is safe for a fresh container because `BOT_STRATEGY_MODE` defaults to `signal_only` and `BOT_SIGNAL_PRESET` defaults to `w1`.
 
 If you switch to `mimic_lot`, the bot may look for:
 
