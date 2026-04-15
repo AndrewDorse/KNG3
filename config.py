@@ -34,7 +34,7 @@ class BotConfigError(RuntimeError):
 class BotConfig:
     private_key: str
     funder: str
-    bot_version: str = "2026-04-15 11:02:06"
+    bot_version: str = "2026-04-15 12:01:27"
     signature_type: int = 0
     dry_run: bool = True
     poll_interval_seconds: float = 1.0
@@ -125,7 +125,7 @@ class BotConfig:
         return cls(
             private_key=private_key,
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "2026-04-15 11:02:06").strip(),
+            bot_version=os.getenv("BOT_VERSION", "2026-04-15 12:01:27").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),

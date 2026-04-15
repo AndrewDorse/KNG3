@@ -306,6 +306,7 @@ BOX_WINNER_PRICE_MIN = 0.40
 BOX_WINNER_PRICE_MAX = 0.90
 BOX_LOSER_PRICE_MAX = 0.44
 BOX_LOSER_SPREAD_MIN = 0.08
+S0_PAIR_AVG_MAX = 0.95
 
 
 @dataclass(slots=True)
@@ -1883,7 +1884,7 @@ class Btc15RedeemEngine:
                 total_sh = trend_shares + hedge_shares
                 trend_share_ratio = (trend_shares / total_sh) if total_sh else 0.0
                 trend_if_win = snapshot.up_pnl_if_win if trend_side == "UP" else snapshot.down_pnl_if_win
-                pair_ok = snapshot.pair_avg_sum <= 1.03 or snapshot.guarantee_ratio >= 0.95
+                pair_ok = snapshot.pair_avg_sum <= S0_PAIR_AVG_MAX or snapshot.guarantee_ratio >= 0.95
                 if (
                     trend_price <= primary_price_soft_max
                     and pair_ok

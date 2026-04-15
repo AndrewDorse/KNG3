@@ -43,6 +43,7 @@ EARLY_WINDOW_SKIP_CHECK_ELAPSED = 120.0
 EARLY_WINDOW_SKIP_PM_RANGE = 0.60
 BTC_VOLUME_OK_LOOKBACK_POINTS = 30
 HEDGE_PAIR_SUM_MAX = 0.90
+HEDGE_PAIR_SUM_MAX_RICH_ENTRY = 0.95
 HEDGE_MIN_LIMIT_PRICE = 0.01
 
 ACTIVE_SIGNAL_NAMES: set[str] = {
@@ -347,6 +348,11 @@ class SignalAnalyzer:
             return None
         return eng._last_contract.up if side == "Up" else eng._last_contract.down
 
+    def _hedge_pair_sum_cap(self, primary_buy_limit: float) -> float:
+        if primary_buy_limit >= 0.85 - 1e-9:
+            return HEDGE_PAIR_SUM_MAX_RICH_ENTRY
+        return HEDGE_PAIR_SUM_MAX
+
     def _place_buy(self, name: str, side: str, price: float, prob: str, ev: str, extra: str = "") -> bool:
         placed_side = self._buys_placed_up if side == "Up" else self._buys_placed_down
         if placed_side >= self._max_buys_per_side:
@@ -397,7 +403,8 @@ class SignalAnalyzer:
                 }
             )
             hedge_side = "Down" if side == "Up" else "Up"
-            hedge_limit = round(HEDGE_PAIR_SUM_MAX - limit, 2)
+            hedge_pair_sum_cap = self._hedge_pair_sum_cap(limit)
+            hedge_limit = round(hedge_pair_sum_cap - limit, 2)
             if hedge_limit >= HEDGE_MIN_LIMIT_PRICE:
                 self._pending_hedges.append(
                     {
@@ -407,6 +414,7 @@ class SignalAnalyzer:
                         "shares": CLIP,
                         "primary_min_balance": float(CLIP),
                         "primary_buy_limit": float(limit),
+                        "hedge_pair_sum_cap": float(hedge_pair_sum_cap),
                         "hedge_limit": float(max(HEDGE_MIN_LIMIT_PRICE, hedge_limit)),
                     }
                 )
@@ -418,7 +426,7 @@ class SignalAnalyzer:
                     hedge_side,
                     max(HEDGE_MIN_LIMIT_PRICE, hedge_limit),
                     CLIP,
-                    HEDGE_PAIR_SUM_MAX,
+                    hedge_pair_sum_cap,
                     self._window_slug,
                 )
             return True
