@@ -34,7 +34,7 @@ class BotConfigError(RuntimeError):
 class BotConfig:
     private_key: str
     funder: str
-    bot_version: str = "2026-04-15 15:12:21"
+    bot_version: str = "2026-04-15 19:10:00"
     signature_type: int = 0
     dry_run: bool = True
     poll_interval_seconds: float = 1.0
@@ -53,18 +53,18 @@ class BotConfig:
     window_minutes: int = 15
     window_pick_current_grace_seconds: int = 300
     trade_one_window: bool = False
-    strategy_budget_cap_usdc: float = 85.0
+    strategy_budget_cap_usdc: float = 80.0
     strategy_wallet_reserve_usdc: float = 0.0
     strategy_min_budget_usdc: float = 15.0
-    strategy_entry_delay_seconds: int = 15
+    strategy_entry_delay_seconds: int = 35
     strategy_new_order_cutoff_seconds: int = 30
     strategy_fill_grace_seconds: float = 5.0
     strategy_stale_order_seconds: float = 20.0
-    strategy_max_live_orders: int = 2
+    strategy_max_live_orders: int = 4
     strategy_heartbeat_interval_seconds: int = 15
     strategy_price_record_interval_seconds: float = 1.0
     strategy_price_buffer: float = 0.02
-    strategy_primary_flip_threshold: float = 0.03
+    strategy_primary_flip_threshold: float = 0.05
     strategy_max_reversals: int = 1
     strategy_min_stop_orders_per_side: int = 5
     strategy_primary_unlock_seconds: int = 90
@@ -79,8 +79,8 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only
-    strategy_mode: str = "signal_only"
+    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid
+    strategy_mode: str = "volume_t10_hybrid"
 
     @property
     def window_size_seconds(self) -> int:
@@ -126,7 +126,7 @@ class BotConfig:
         return cls(
             private_key=private_key,
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "2026-04-15 15:12:21").strip(),
+            bot_version=os.getenv("BOT_VERSION", "2026-04-15 19:10:00").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),
@@ -144,18 +144,18 @@ class BotConfig:
             window_minutes=_env_int("BOT_WINDOW_MINUTES", 15),
             window_pick_current_grace_seconds=_env_int("BOT_WINDOW_PICK_CURRENT_GRACE_SECONDS", 300),
             trade_one_window=_env_bool("BOT_TRADE_ONE_WINDOW", False),
-            strategy_budget_cap_usdc=_env_float("BOT_STRATEGY_BUDGET_CAP_USDC", 85.0),
+            strategy_budget_cap_usdc=_env_float("BOT_STRATEGY_BUDGET_CAP_USDC", 80.0),
             strategy_wallet_reserve_usdc=_env_float("BOT_STRATEGY_WALLET_RESERVE_USDC", 0.0),
             strategy_min_budget_usdc=_env_float("BOT_STRATEGY_MIN_BUDGET_USDC", 15.0),
-            strategy_entry_delay_seconds=_env_int("BOT_STRATEGY_ENTRY_DELAY_SECONDS", 15),
+            strategy_entry_delay_seconds=_env_int("BOT_STRATEGY_ENTRY_DELAY_SECONDS", 35),
             strategy_new_order_cutoff_seconds=_env_int("BOT_STRATEGY_NEW_ORDER_CUTOFF_SECONDS", 30),
             strategy_fill_grace_seconds=_env_float("BOT_STRATEGY_FILL_GRACE_SECONDS", 5.0),
             strategy_stale_order_seconds=_env_float("BOT_STRATEGY_STALE_ORDER_SECONDS", 20.0),
-            strategy_max_live_orders=_env_int("BOT_STRATEGY_MAX_LIVE_ORDERS", 2),
+            strategy_max_live_orders=_env_int("BOT_STRATEGY_MAX_LIVE_ORDERS", 4),
             strategy_heartbeat_interval_seconds=_env_int("BOT_STRATEGY_HEARTBEAT_INTERVAL_SECONDS", 15),
             strategy_price_record_interval_seconds=_env_float("BOT_STRATEGY_PRICE_RECORD_INTERVAL_SECONDS", 1.0),
             strategy_price_buffer=_env_float("BOT_STRATEGY_PRICE_BUFFER", 0.02),
-            strategy_primary_flip_threshold=_env_float("BOT_STRATEGY_PRIMARY_FLIP_THRESHOLD", 0.03),
+            strategy_primary_flip_threshold=_env_float("BOT_STRATEGY_PRIMARY_FLIP_THRESHOLD", 0.05),
             strategy_max_reversals=_env_int("BOT_STRATEGY_MAX_REVERSALS", 1),
             strategy_min_stop_orders_per_side=_env_int("BOT_STRATEGY_MIN_STOP_ORDERS_PER_SIDE", 5),
             strategy_primary_unlock_seconds=_env_int("BOT_STRATEGY_PRIMARY_UNLOCK_SECONDS", 90),
@@ -170,7 +170,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=os.getenv("BOT_STRATEGY_MODE", "signal_only").strip().lower(),
+            strategy_mode=os.getenv("BOT_STRATEGY_MODE", "volume_t10_hybrid").strip().lower(),
         )
 
 

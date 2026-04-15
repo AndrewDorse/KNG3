@@ -32,6 +32,9 @@ AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
 STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
 STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"
 MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
+WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
+VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
+VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
 STRATEGY_PROFILE_ID = AA1_STRATEGY_PROFILE_ID
 
 
@@ -245,6 +248,48 @@ S0_META_H1 = {
     "late_trend_min_win_pnl": 1.5,
     "primary_flip_threshold": 0.03,
 }
+WD_DECISION_DELAY_SECONDS = 180
+WD_FILTER_MAX_EARLY_FLIPS_180 = 3
+WD_FILTER_MAX_EARLY_LEAD_MAX_180 = 0.28
+WD_PROFILE = {
+    "phase_caps_name": "wallet_late",
+    "entry_delay_seconds": 35,
+    "late_trend_start_seconds": 390,
+    "late_trend_clear_edge": 0.10,
+    "primary_price_min": 0.40,
+    "primary_price_max": 0.68,
+    "primary_price_soft_max": 0.80,
+    "primary_price_hard_max": 0.84,
+    "hedge_max_price": 0.22,
+    "late_hedge_max_price": 0.36,
+    "primary_target_share": 0.60,
+    "hedge_target_share": 0.28,
+    "target_directional_ratio": 1.10,
+    "target_guarantee_ratio": 0.80,
+    "late_repair_seconds": 180,
+    "late_trend_target_share": 0.72,
+    "late_trend_hedge_max_price": 0.30,
+    "late_trend_min_win_pnl": 0.50,
+    "primary_flip_threshold": 0.05,
+}
+VOLUME_ENTRY_MIN_ELAPSED_SECONDS = 60.0
+VOLUME_ENTRY_MAX_ELAPSED_SECONDS = 600.0
+VOLUME_AVG_LOOKBACK_SECONDS = 30
+VOLUME_RATIO_THRESHOLD = 2.5
+VOLUME_ENTRY_MIN_PRICE = 0.05
+VOLUME_ENTRY_MAX_PRICE = 0.90
+T10_ENTRY_START_SECONDS_REMAINING = 20.0
+T10_ENTRY_END_SECONDS_REMAINING = 3.0
+T10_MIN_WINDOW_ELAPSED_SECONDS = 120.0
+T10_MIN_BTC_DELTA = 0.0005
+T10_PAIR_SUM_TARGET = 0.98
+T10_ENTRY_MIN_PRICE = 0.05
+T10_ENTRY_MAX_PRICE = 0.95
+POSITION_MAX_PCT = 0.20
+POLY_MIN_LIMIT_SHARES = 5
+MAKER_FEE_RATE_BPS = 50
+MAKER_PRICE_TICK = 0.01
+VOLUME_T10_TP_START_SECONDS_REMAINING = 60.0
 LATE_REPAIR_SECONDS = 120
 LATE_TREND_START_SECONDS = 300
 LATE_TREND_CLEAR_PRICE = 0.55
@@ -357,6 +402,11 @@ class OrderCandidate:
     limit_ceiling: float
     reason: str
     shares: int
+    min_shares: int = 1
+    post_only: bool = False
+    fee_rate_bps: int | None = None
+    strategy_tag: str = ""
+    execution_style: str = "normal"
 
 
 @dataclass(slots=True)
@@ -419,6 +469,7 @@ class Btc15RedeemEngine:
         self._late_trend_locked_side: str | None = None
         self._s0_meta_action: str | None = None
         self._s0_meta_profile: dict[str, float | str] | None = None
+        self._wd_window_action: str | None = None
         self._primary_reversals = 0
         self._last_primary_switch_time = 0.0
         self._tp_phase_started = False
@@ -441,6 +492,9 @@ class Btc15RedeemEngine:
         self._last_btc_trade_count: int = 0
         self._btc_price_history: list[BtcPricePoint] = []
         self._last_btc_feed_error_log: float = 0.0
+        self._window_open_btc_price: float | None = None
+        self._volume_t10_trade_taken = False
+        self._volume_t10_trade_tag: str | None = None
 
         self._order_map: dict[str, ManagedOrder] = {}
         self._orders_placed = 0
@@ -495,17 +549,33 @@ class Btc15RedeemEngine:
     def _strategy_mode_strategy_0(self) -> bool:
         return self.config.strategy_mode == "strategy_0"
 
+    def _strategy_mode_wd(self) -> bool:
+        return self.config.strategy_mode == "wd"
+
+    def _strategy_mode_volume_t10(self) -> bool:
+        return self.config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}
+
     def _strategy_mode_signal_only(self) -> bool:
         return self.config.strategy_mode == "signal_only"
 
     def _strategy_mode_hold_to_redeem(self) -> bool:
-        return self._strategy_mode_mimic() or self._strategy_mode_box_balance()
+        return (
+            self._strategy_mode_mimic()
+            or self._strategy_mode_box_balance()
+            or self._strategy_mode_volume_t10()
+        )
 
     def _profile_label(self) -> str:
         if self._strategy_mode_box_balance():
             return BOX_STRATEGY_PROFILE_ID
         if self._strategy_mode_mimic():
             return MIMIC_STRATEGY_PROFILE_ID
+        if self._strategy_mode_wd():
+            return WD_STRATEGY_PROFILE_ID
+        if self._strategy_mode_volume_t10():
+            if self.config.strategy_mode == "volume_t10_hybrid":
+                return VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID
+            return VOLUME_T10_STRATEGY_PROFILE_ID
         if self._strategy_mode_signal_only():
             return "SIGNAL_ANALYZER_v1"
         if self._strategy_mode_strategy_0():
@@ -635,11 +705,20 @@ class Btc15RedeemEngine:
 
         open_orders = self._get_contract_orders(contract)
         self._maybe_enter_early_exit_mode(contract)
-        if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only():
+        if (
+            not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only()
+        ) or self._strategy_mode_volume_t10():
             self._manage_exit_orders(contract, open_orders)
             self._cleanup_small_leftovers(contract, seconds_remaining, time.time())
 
-        if not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only() and seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+        if (
+            not self._strategy_mode_hold_to_redeem()
+            and not self._strategy_mode_signal_only()
+            and seconds_remaining <= self.config.strategy_new_order_cutoff_seconds
+        ) or (
+            self._strategy_mode_volume_t10()
+            and seconds_remaining <= VOLUME_T10_TP_START_SECONDS_REMAINING
+        ):
             self._run_take_profit_phase(contract)
 
         snapshot = self._build_snapshot()
@@ -651,7 +730,7 @@ class Btc15RedeemEngine:
                 f"waiting for balance settlement: budget ${self._window_budget_usdc:.2f} "
                 f"< tradable ${self._minimum_tradable_budget_usdc():.2f}"
             )
-        elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem():
+        elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_volume_t10():
             self._no_signal_reason = "exit mode active"
         elif elapsed >= self.config.strategy_entry_delay_seconds:
             if self._strategy_mode_mimic():
@@ -678,8 +757,24 @@ class Btc15RedeemEngine:
                             self._box_last_side_elapsed[candidate.side_label] = elapsed
                 elif self._no_signal_reason:
                     LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            elif self._strategy_mode_volume_t10():
+                candidate = self._choose_volume_t10_candidate(snapshot, elapsed, seconds_remaining)
+                if candidate is not None:
+                    open_orders = self._get_contract_orders(contract)
+                    if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        self._place_candidate(contract, candidate, snapshot, elapsed)
+                elif self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
             elif self._strategy_mode_signal_only():
                 pass  # signal_analyzer thread handles orders
+            elif self._strategy_mode_wd():
+                candidate = self._choose_wd_candidate(snapshot, elapsed, seconds_remaining)
+                if candidate is not None:
+                    open_orders = self._get_contract_orders(contract)
+                    if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                        self._place_candidate(contract, candidate, snapshot, elapsed)
+                elif self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
             elif self._strategy_mode_strategy_0():
                 candidate = self._choose_strategy_0_candidate(snapshot, elapsed, seconds_remaining)
                 if candidate is not None:
@@ -721,6 +816,7 @@ class Btc15RedeemEngine:
         self._late_trend_locked_side = None
         self._s0_meta_action = None
         self._s0_meta_profile = None
+        self._wd_window_action = None
         self._primary_reversals = 0
         self._last_primary_switch_time = 0.0
         self._tp_phase_started = False
@@ -755,6 +851,9 @@ class Btc15RedeemEngine:
         self._last_btc_quote_volume = None
         self._last_btc_trade_count = 0
         self._btc_price_history.clear()
+        self._window_open_btc_price = None
+        self._volume_t10_trade_taken = False
+        self._volume_t10_trade_tag = None
 
         self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
         self._baseline_down_balance = self.trader.token_balance(contract.down.token_id)
@@ -873,6 +972,40 @@ class Btc15RedeemEngine:
                 S0_META_DECISION_DELAY_SECONDS,
                 self.config.strategy_new_order_cutoff_seconds,
                 TP_PRICE,
+            )
+        elif self._strategy_mode_wd():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | decision_delay=%ds | early_filters: flips_180<=%d lead_max_180<=%.2f | "
+                "entry_delay=%ds | target_primary=%.2f target_hedge=%.2f | directional=%.2f guarantee=%.2f | tp=$%.2f",
+                contract.slug,
+                self._profile_label(),
+                WD_DECISION_DELAY_SECONDS,
+                WD_FILTER_MAX_EARLY_FLIPS_180,
+                WD_FILTER_MAX_EARLY_LEAD_MAX_180,
+                self.config.strategy_entry_delay_seconds,
+                float(WD_PROFILE["primary_target_share"]),
+                float(WD_PROFILE["hedge_target_share"]),
+                float(WD_PROFILE["target_directional_ratio"]),
+                float(WD_PROFILE["target_guarantee_ratio"]),
+                TP_PRICE,
+            )
+        elif self._strategy_mode_volume_t10():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | volume_first=%ds-%ds ratio>%.2f | "
+                "volume_side=BTC_direction | t10_window=T-%ds..T-%ds | hybrid_exec=maker>=10s,maker>=5s,taker<5s | "
+                "tp_last_minute=$%.2f | min_btc_delta=%.4f | pair_sum<=%.2f | max_pos_pct=%.2f | min_shares=%d",
+                contract.slug,
+                self._profile_label(),
+                int(VOLUME_ENTRY_MIN_ELAPSED_SECONDS),
+                int(VOLUME_ENTRY_MAX_ELAPSED_SECONDS),
+                VOLUME_RATIO_THRESHOLD,
+                int(T10_ENTRY_START_SECONDS_REMAINING),
+                int(T10_ENTRY_END_SECONDS_REMAINING),
+                TP_PRICE,
+                T10_MIN_BTC_DELTA,
+                T10_PAIR_SUM_TARGET,
+                POSITION_MAX_PCT,
+                POLY_MIN_LIMIT_SHARES,
             )
         else:
             LOGGER.info(
@@ -1013,6 +1146,8 @@ class Btc15RedeemEngine:
                 trade_count=point.trade_count,
             )
         )
+        if self._window_open_btc_price is None and now >= self._window_start_ts and point.price > 0:
+            self._window_open_btc_price = point.price
         cutoff = now - BTC_PRICE_HISTORY_RETENTION_SECONDS
         self._btc_price_history = [p for p in self._btc_price_history if p.ts >= cutoff]
 
@@ -1737,6 +1872,172 @@ class Btc15RedeemEngine:
             "early_mid_balance_secs": float(early_mid_balance_secs),
         }
 
+    def _btc_rows_in_window(self) -> list[BtcPricePoint]:
+        if self._window_start_ts <= 0:
+            return []
+        return [point for point in self._btc_price_history if point.ts >= self._window_start_ts]
+
+    def _volume_t10_btc_return(self) -> float | None:
+        if self._window_open_btc_price is None or self._window_open_btc_price <= 0:
+            return None
+        if self._last_btc_price is None or self._last_btc_price <= 0:
+            return None
+        return (self._last_btc_price - self._window_open_btc_price) / self._window_open_btc_price
+
+    def _volume_t10_latest_volume_ratio(self) -> float | None:
+        rows = self._btc_rows_in_window()
+        if len(rows) <= VOLUME_AVG_LOOKBACK_SECONDS:
+            return None
+        current = float(rows[-1].quote_volume or rows[-1].base_volume or 0.0)
+        if current <= 0:
+            return None
+        prev = [
+            float(point.quote_volume or point.base_volume or 0.0)
+            for point in rows[-(VOLUME_AVG_LOOKBACK_SECONDS + 1):-1]
+        ]
+        if not prev:
+            return None
+        avg_prev = sum(prev) / len(prev)
+        if avg_prev <= 0:
+            return None
+        return current / avg_prev
+
+    def _volume_t10_target_shares(self, entry_price: float) -> int:
+        safe_price = max(0.01, entry_price)
+        position_notional = self._window_budget_usdc * POSITION_MAX_PCT
+        target = int(position_notional / safe_price)
+        return max(POLY_MIN_LIMIT_SHARES, target)
+
+    def _wd_early_features(self) -> dict[str, float]:
+        price_rows_180 = self._s0_elapsed_price_rows(WD_DECISION_DELAY_SECONDS)
+        early_flips_180 = 0
+        prev_dom: str | None = None
+        early_lead_max = 0.0
+        for point in price_rows_180:
+            dom = "UP" if point.up_price >= point.down_price else "DOWN"
+            if prev_dom is not None and dom != prev_dom:
+                early_flips_180 += 1
+            prev_dom = dom
+            early_lead_max = max(early_lead_max, abs(point.up_price - point.down_price))
+        return {
+            "early_flips_180": float(early_flips_180),
+            "early_lead_max": float(early_lead_max),
+        }
+
+    def _wd_choose_action(self, elapsed: float) -> str | None:
+        if self._wd_window_action is not None:
+            return self._wd_window_action
+        if elapsed < WD_DECISION_DELAY_SECONDS:
+            return None
+
+        features = self._wd_early_features()
+        early_flips_180 = int(features["early_flips_180"])
+        early_lead_max = float(features["early_lead_max"])
+        action = (
+            "trade"
+            if early_flips_180 <= WD_FILTER_MAX_EARLY_FLIPS_180
+            and early_lead_max <= WD_FILTER_MAX_EARLY_LEAD_MAX_180
+            else "skip"
+        )
+        self._wd_window_action = action
+        LOGGER.info(
+            "[WD FILTER] %s | action=%s | early_flips_180=%d | early_lead_max=%.4f",
+            self._current_window_slug,
+            action,
+            early_flips_180,
+            early_lead_max,
+        )
+        return self._wd_window_action
+
+    def _wd_profile_value(self, key: str) -> float:
+        value = WD_PROFILE.get(key)
+        if value is None:
+            raise KeyError(f"Missing WD profile key: {key}")
+        return float(value)
+
+    def _choose_volume_t10_candidate(
+        self,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> OrderCandidate | None:
+        self._no_signal_reason = ""
+        if self._volume_t10_trade_taken:
+            self._no_signal_reason = f"{self._volume_t10_trade_tag or 'window'} trade already taken"
+            return None
+        if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return None
+        btc_return = self._volume_t10_btc_return()
+        if btc_return is None:
+            self._no_signal_reason = "waiting for btc open/current price"
+            return None
+
+        if VOLUME_ENTRY_MIN_ELAPSED_SECONDS <= elapsed <= VOLUME_ENTRY_MAX_ELAPSED_SECONDS:
+            volume_ratio = self._volume_t10_latest_volume_ratio()
+            if volume_ratio is None:
+                self._no_signal_reason = "waiting for 30s BTC volume baseline"
+                return None
+            if volume_ratio > VOLUME_RATIO_THRESHOLD:
+                if btc_return == 0:
+                    self._no_signal_reason = "volume spike but BTC direction is flat"
+                    return None
+                side_label = "UP" if btc_return > 0 else "DOWN"
+                side_price = self._side_price(side_label)
+                if not (VOLUME_ENTRY_MIN_PRICE < side_price <= VOLUME_ENTRY_MAX_PRICE):
+                    self._no_signal_reason = f"volume {side_label} price outside entry band"
+                    return None
+                return OrderCandidate(
+                    side_label=side_label,
+                    kind="primary",
+                    reference_price=side_price,
+                    limit_ceiling=VOLUME_ENTRY_MAX_PRICE,
+                    reason=f"volume|ratio={volume_ratio:.2f}|btc_ret={btc_return:.5f}",
+                    shares=self._volume_t10_target_shares(side_price),
+                    min_shares=POLY_MIN_LIMIT_SHARES,
+                    strategy_tag="volume",
+                    execution_style="taker_best_ask",
+                )
+
+        if elapsed < T10_MIN_WINDOW_ELAPSED_SECONDS:
+            self._no_signal_reason = f"waiting for T10 regime (elapsed<{int(T10_MIN_WINDOW_ELAPSED_SECONDS)})"
+            return None
+        if not (T10_ENTRY_END_SECONDS_REMAINING <= seconds_remaining <= T10_ENTRY_START_SECONDS_REMAINING):
+            self._no_signal_reason = "outside T10 entry window"
+            return None
+        if abs(btc_return) < T10_MIN_BTC_DELTA:
+            self._no_signal_reason = "btc delta below T10 minimum"
+            return None
+
+        side_label = "UP" if btc_return > 0 else "DOWN"
+        entry_price = self._side_price(side_label)
+        pair_sum = self._side_price("UP") + self._side_price("DOWN")
+        if pair_sum > T10_PAIR_SUM_TARGET:
+            self._no_signal_reason = "pair sum too rich for T10 maker"
+            return None
+        if not (T10_ENTRY_MIN_PRICE < entry_price <= T10_ENTRY_MAX_PRICE):
+            self._no_signal_reason = "T10 price outside entry band"
+            return None
+        return OrderCandidate(
+            side_label=side_label,
+            kind="primary",
+            reference_price=entry_price,
+            limit_ceiling=T10_ENTRY_MAX_PRICE,
+            reason=f"t10_hybrid|pair={pair_sum:.3f}|btc_ret={btc_return:.5f}",
+            shares=self._volume_t10_target_shares(entry_price),
+            min_shares=POLY_MIN_LIMIT_SHARES,
+            strategy_tag="t10",
+            post_only=seconds_remaining >= 5.0,
+            fee_rate_bps=MAKER_FEE_RATE_BPS,
+            execution_style=(
+                "maker_signal"
+                if seconds_remaining >= 10.0
+                else "maker_best_bid"
+                if seconds_remaining >= 5.0
+                else "taker_best_ask"
+            ),
+        )
+
     def _s0_choose_meta_action(self, elapsed: float) -> str | None:
         if self._s0_meta_action is not None:
             return self._s0_meta_action
@@ -1821,6 +2122,175 @@ class Btc15RedeemEngine:
             early_mid_balance_secs,
         )
         return self._s0_meta_action
+
+    def _choose_wd_candidate(
+        self,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        seconds_remaining: float,
+    ) -> OrderCandidate | None:
+        self._no_signal_reason = ""
+        lot = self.config.shares_per_level
+        if elapsed < WD_DECISION_DELAY_SECONDS:
+            self._no_signal_reason = f"wd waiting for {WD_DECISION_DELAY_SECONDS}s filter window"
+            return None
+
+        action = self._wd_choose_action(elapsed)
+        if action is None:
+            self._no_signal_reason = "wd decision pending"
+            return None
+        if action == "skip":
+            self._no_signal_reason = "wd skipped window"
+            return None
+
+        target_directional_ratio = self._wd_profile_value("target_directional_ratio")
+        target_guarantee_ratio = self._wd_profile_value("target_guarantee_ratio")
+        late_trend_start_seconds = self._wd_profile_value("late_trend_start_seconds")
+        primary_price_min = self._wd_profile_value("primary_price_min")
+        primary_price_max = self._wd_profile_value("primary_price_max")
+        primary_price_soft_max = self._wd_profile_value("primary_price_soft_max")
+        primary_price_hard_max = self._wd_profile_value("primary_price_hard_max")
+        hedge_max_price = self._wd_profile_value("hedge_max_price")
+        late_hedge_max_price = self._wd_profile_value("late_hedge_max_price")
+        primary_target_share = self._wd_profile_value("primary_target_share")
+        hedge_target_share = self._wd_profile_value("hedge_target_share")
+        late_repair_seconds = self._wd_profile_value("late_repair_seconds")
+        late_trend_target_share = self._wd_profile_value("late_trend_target_share")
+        late_trend_hedge_max_price = self._wd_profile_value("late_trend_hedge_max_price")
+        late_trend_min_win_pnl = self._wd_profile_value("late_trend_min_win_pnl")
+
+        if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return None
+        if seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            self._no_signal_reason = "past new-order cutoff"
+            return None
+        if (
+            snapshot.total_spend > 0
+            and snapshot.directional_ratio >= target_directional_ratio
+            and snapshot.guarantee_ratio >= target_guarantee_ratio
+        ):
+            self._no_signal_reason = "coverage targets already met"
+            return None
+
+        if elapsed >= late_trend_start_seconds:
+            trend_side = self._late_trend_side()
+            if trend_side is not None:
+                trend_price = self._side_price(trend_side)
+                hedge_side = "DOWN" if trend_side == "UP" else "UP"
+                hedge_price = self._side_price(hedge_side)
+                trend_shares = snapshot.up_shares if trend_side == "UP" else snapshot.down_shares
+                hedge_shares = snapshot.down_shares if trend_side == "UP" else snapshot.up_shares
+                total_sh = trend_shares + hedge_shares
+                trend_share_ratio = (trend_shares / total_sh) if total_sh else 0.0
+                trend_if_win = snapshot.up_pnl_if_win if trend_side == "UP" else snapshot.down_pnl_if_win
+                pair_ok = snapshot.pair_avg_sum <= S0_PAIR_AVG_MAX or snapshot.guarantee_ratio >= 0.95
+                if (
+                    trend_price <= primary_price_soft_max
+                    and pair_ok
+                    and (
+                        trend_shares <= hedge_shares
+                        or trend_share_ratio < late_trend_target_share
+                        or trend_if_win < late_trend_min_win_pnl
+                    )
+                ):
+                    return OrderCandidate(
+                        side_label=trend_side,
+                        kind="primary",
+                        reference_price=trend_price,
+                        limit_ceiling=min(primary_price_hard_max, trend_price + 0.05),
+                        reason="wd_late_winner_press",
+                        shares=lot,
+                    )
+                if hedge_price <= late_trend_hedge_max_price and snapshot.guarantee_ratio < 0.92:
+                    return OrderCandidate(
+                        side_label=hedge_side,
+                        kind="hedge",
+                        reference_price=hedge_price,
+                        limit_ceiling=min(late_trend_hedge_max_price, hedge_price + 0.05),
+                        reason="wd_late_trend_hedge",
+                        shares=lot,
+                    )
+                if trend_side != snapshot.primary_side:
+                    self._no_signal_reason = "late trend lock (winner vs primary)"
+                    return None
+
+        if snapshot.total_spend == 0:
+            if primary_price_min <= snapshot.primary_price <= primary_price_soft_max:
+                return OrderCandidate(
+                    side_label=snapshot.primary_side,
+                    kind="primary",
+                    reference_price=snapshot.primary_price,
+                    limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
+                    reason="wd_initial_primary",
+                    shares=lot,
+                )
+            self._no_signal_reason = "initial primary outside entry band"
+            return None
+
+        if (
+            seconds_remaining <= late_repair_seconds
+            and snapshot.guarantee_ratio < 0.90
+            and snapshot.hedge_price <= late_hedge_max_price
+        ):
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(late_hedge_max_price, snapshot.hedge_price + 0.05),
+                reason="wd_late_repair",
+                shares=lot,
+            )
+
+        if (
+            snapshot.primary_spend_share < primary_target_share
+            and primary_price_min <= snapshot.primary_price <= primary_price_max
+        ):
+            return OrderCandidate(
+                side_label=snapshot.primary_side,
+                kind="primary",
+                reference_price=snapshot.primary_price,
+                limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
+                reason="wd_build_primary",
+                shares=lot,
+            )
+
+        if (
+            snapshot.hedge_spend_share < hedge_target_share
+            and snapshot.hedge_price <= hedge_max_price
+            and snapshot.guarantee_ratio < 0.95
+        ):
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(hedge_max_price, snapshot.hedge_price + 0.05),
+                reason="wd_cheap_hedge",
+                shares=lot,
+            )
+
+        if snapshot.directional_ratio < target_directional_ratio and snapshot.primary_price <= primary_price_soft_max:
+            return OrderCandidate(
+                side_label=snapshot.primary_side,
+                kind="primary",
+                reference_price=snapshot.primary_price,
+                limit_ceiling=min(primary_price_hard_max, snapshot.primary_price + 0.05),
+                reason="wd_coverage_primary",
+                shares=lot,
+            )
+
+        if snapshot.guarantee_ratio < 0.85 and snapshot.hedge_price <= late_hedge_max_price:
+            return OrderCandidate(
+                side_label=snapshot.hedge_side,
+                kind="hedge",
+                reference_price=snapshot.hedge_price,
+                limit_ceiling=min(late_hedge_max_price, snapshot.hedge_price + 0.05),
+                reason="wd_repair_hedge",
+                shares=lot,
+            )
+
+        self._no_signal_reason = "wd: no entry rule fired"
+        return None
 
     def _choose_strategy_0_candidate(
         self,
@@ -2433,7 +2903,12 @@ class Btc15RedeemEngine:
             min(candidate.limit_ceiling, candidate.reference_price + self.config.strategy_price_buffer),
             2,
         )
-        scaled_shares = self._scaled_order_shares(candidate.reference_price, candidate.shares, elapsed)
+        scaled_shares = self._scaled_order_shares(
+            candidate.reference_price,
+            candidate.shares,
+            elapsed,
+            min_shares=candidate.min_shares,
+        )
         if scaled_shares <= 0:
             self._no_signal_reason = "insufficient remaining budget for venue-min order"
             return False
@@ -2459,7 +2934,16 @@ class Btc15RedeemEngine:
         elapsed: float,
     ) -> bool:
         token = contract.up if candidate.side_label == "UP" else contract.down
-        limit_price = self._resolve_limit_price(token, candidate.reference_price, candidate.limit_ceiling)
+        limit_price, order_type = self._resolve_entry_order(
+            token,
+            candidate.reference_price,
+            candidate.limit_ceiling,
+            execution_style=candidate.execution_style,
+            post_only=candidate.post_only,
+        )
+        if limit_price is None:
+            self._no_signal_reason = "no executable entry price available"
+            return False
         shares = candidate.shares
         order_kind = candidate.kind.upper()
         actual_notional = limit_price * shares
@@ -2492,8 +2976,11 @@ class Btc15RedeemEngine:
                 reason=candidate.reason,
             )
             self._record_order_metrics(candidate.kind)
+            if candidate.strategy_tag and self._strategy_mode_volume_t10():
+                self._volume_t10_trade_taken = True
+                self._volume_t10_trade_tag = candidate.strategy_tag
             LOGGER.info(
-                "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | reason=%s",
+                "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | post_only=%s | reason=%s",
                 order_kind,
                 contract.slug,
                 candidate.side_label,
@@ -2501,12 +2988,27 @@ class Btc15RedeemEngine:
                 limit_price,
                 shares,
                 projection["pair_sum"],
+                candidate.post_only,
                 candidate.reason,
             )
             return True
 
         try:
-            resp = self.trader.place_limit_buy(token, limit_price, shares)
+            if order_type == "taker":
+                resp = self.trader.place_marketable_buy(
+                    token,
+                    limit_price,
+                    shares,
+                    fee_rate_bps=candidate.fee_rate_bps,
+                )
+            else:
+                resp = self.trader.place_limit_buy(
+                    token,
+                    limit_price,
+                    shares,
+                    fee_rate_bps=candidate.fee_rate_bps,
+                    post_only=candidate.post_only,
+                )
             order_id = str(resp.get("orderID") or resp.get("id") or "")
         except Exception as exc:
             self._no_signal_reason = f"order placement failed: {exc}"
@@ -2541,8 +3043,11 @@ class Btc15RedeemEngine:
             reason=candidate.reason,
         )
         self._record_order_metrics(candidate.kind)
+        if candidate.strategy_tag and self._strategy_mode_volume_t10():
+            self._volume_t10_trade_taken = True
+            self._volume_t10_trade_tag = candidate.strategy_tag
         LOGGER.info(
-            "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | reason=%s",
+            "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | exec=%s | post_only=%s | reason=%s",
             order_kind,
             contract.slug,
             candidate.side_label,
@@ -2551,6 +3056,8 @@ class Btc15RedeemEngine:
             shares,
             projection["pair_sum"],
             order_id[:16],
+            order_type,
+            candidate.post_only,
             candidate.reason,
         )
         return True
@@ -2563,14 +3070,72 @@ class Btc15RedeemEngine:
         else:
             self._hedge_orders += 1
 
-    def _resolve_limit_price(self, token: TokenMarket, reference_price: float, limit_ceiling: float) -> float:
+    def _resolve_limit_price(
+        self,
+        token: TokenMarket,
+        reference_price: float,
+        limit_ceiling: float,
+        *,
+        post_only: bool = False,
+    ) -> float | None:
         proposed = round(min(limit_ceiling, reference_price + self.config.strategy_price_buffer), 2)
+        if post_only:
+            spread = self.trader.get_spread(token.token_id)
+            best_bid = spread.get("best_bid")
+            best_ask = spread.get("best_ask")
+            if best_bid is None or best_bid <= 0:
+                return None
+            maker_price = round(min(limit_ceiling, best_bid + MAKER_PRICE_TICK), 2)
+            if best_ask is not None and maker_price >= best_ask:
+                maker_price = round(best_bid, 2)
+            if maker_price < 0.01 or maker_price > limit_ceiling:
+                return None
+            return max(0.01, min(0.99, maker_price))
         best_ask = self.trader.get_best_ask(token.token_id)
         if best_ask is not None and 0.01 <= best_ask <= limit_ceiling:
             return round(best_ask, 2)
         return max(0.01, min(0.99, proposed))
 
+    def _resolve_entry_order(
+        self,
+        token: TokenMarket,
+        reference_price: float,
+        limit_ceiling: float,
+        *,
+        execution_style: str,
+        post_only: bool,
+    ) -> tuple[float | None, str]:
+        if execution_style == "maker_signal":
+            maker_price = round(max(0.01, min(limit_ceiling, reference_price)), 2)
+            best_ask = self.trader.get_best_ask(token.token_id)
+            if best_ask is not None and maker_price >= best_ask:
+                best_bid = self.trader.get_best_bid(token.token_id)
+                if best_bid is None or best_bid <= 0:
+                    return None, "maker"
+                maker_price = round(min(limit_ceiling, best_bid), 2)
+            return maker_price, "maker"
+        if execution_style == "maker_best_bid":
+            best_bid = self.trader.get_best_bid(token.token_id)
+            if best_bid is None or best_bid <= 0:
+                return None, "maker"
+            maker_price = round(max(0.01, min(limit_ceiling, best_bid)), 2)
+            return maker_price, "maker"
+        if execution_style == "taker_best_ask":
+            best_ask = self.trader.get_best_ask(token.token_id)
+            if best_ask is not None and best_ask > 0:
+                return round(min(limit_ceiling, best_ask), 2), "taker"
+            fallback = round(max(0.01, min(limit_ceiling, reference_price)), 2)
+            return fallback, "taker"
+        return self._resolve_limit_price(
+            token,
+            reference_price,
+            limit_ceiling,
+            post_only=post_only,
+        ), "maker"
+
     def _phase_cap_usdc(self, elapsed: float) -> float:
+        if self._strategy_mode_volume_t10():
+            return self._window_budget_usdc
         for upper_bound, share in PHASE_SPEND_CAPS:
             if elapsed <= upper_bound:
                 return round(self._window_budget_usdc * share, 2)
@@ -2586,21 +3151,28 @@ class Btc15RedeemEngine:
         safe_price = max(0.01, round(price, 2))
         return max(1, int(math.ceil((MIN_MARKETABLE_BUY_NOTIONAL - 1e-9) / safe_price)))
 
-    def _scaled_order_shares(self, reference_price: float, requested_shares: int, elapsed: float) -> int:
+    def _scaled_order_shares(
+        self,
+        reference_price: float,
+        requested_shares: int,
+        elapsed: float,
+        *,
+        min_shares: int = 1,
+    ) -> int:
         estimated_limit = round(
             min(0.99, max(0.01, reference_price + self.config.strategy_price_buffer)),
             2,
         )
-        min_shares = self._minimum_order_shares(estimated_limit)
+        required_min_shares = max(min_shares, self._minimum_order_shares(estimated_limit))
         committed = self._up_spend + self._down_spend + sum(order.notional for order in self._order_map.values())
         remaining_budget = min(self._phase_cap_usdc(elapsed), self._window_budget_usdc) - committed
         if remaining_budget <= 0:
             return 0
         affordable_shares = int((remaining_budget + 1e-9) // estimated_limit)
-        if affordable_shares < min_shares:
+        if affordable_shares < required_min_shares:
             return 0
         desired_shares = min(max(1, requested_shares), affordable_shares)
-        return max(min_shares, desired_shares)
+        return max(required_min_shares, desired_shares)
 
     def _effective_budget(self, wallet_balance_usdc: float) -> float:
         if self.config.dry_run and wallet_balance_usdc <= 0:

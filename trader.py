@@ -141,7 +141,13 @@ class PolymarketTrader:
 
     @_retry()
     def place_limit_buy(
-        self, token: TokenMarket, price: float, size: int
+        self,
+        token: TokenMarket,
+        price: float,
+        size: int,
+        *,
+        fee_rate_bps: int | None = None,
+        post_only: bool = False,
     ) -> dict[str, Any]:
         """Place a GTC limit buy order. Returns the CLOB response dict.
 
@@ -150,14 +156,39 @@ class PolymarketTrader:
             price: limit price (0.01–0.99)
             size:  number of shares (integer)
         """
-        order = OrderArgs(
-            token_id=token.token_id,
-            price=round(price, 2),
-            size=float(size),
-            side=BUY,
-        )
+        order_kwargs: dict[str, Any] = {
+            "token_id": token.token_id,
+            "price": round(price, 2),
+            "size": float(size),
+            "side": BUY,
+        }
+        if fee_rate_bps is not None:
+            order_kwargs["fee_rate_bps"] = fee_rate_bps
+        order = OrderArgs(**order_kwargs)
         signed = self.client.create_order(order)
-        return self.client.post_order(signed, OrderType.GTC)
+        return self.client.post_order(signed, OrderType.GTC, post_only=post_only)
+
+    @_retry()
+    def place_marketable_buy(
+        self,
+        token: TokenMarket,
+        price: float,
+        size: int,
+        *,
+        fee_rate_bps: int | None = None,
+    ) -> dict[str, Any]:
+        """Place an aggressive buy intended to fill immediately."""
+        order_kwargs: dict[str, Any] = {
+            "token_id": token.token_id,
+            "price": round(price, 2),
+            "size": float(size),
+            "side": BUY,
+        }
+        if fee_rate_bps is not None:
+            order_kwargs["fee_rate_bps"] = fee_rate_bps
+        order = OrderArgs(**order_kwargs)
+        signed = self.client.create_order(order)
+        return self.client.post_order(signed, OrderType.FAK)
 
     @_retry()
     def place_limit_sell(

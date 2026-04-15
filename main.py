@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import sys
 
-from config import BotConfig, BotConfigError, configure_logging, LOGGER
 from btc15_redeem_engine import Btc15RedeemEngine
+from config import BotConfig, BotConfigError, LOGGER, configure_logging
 from market_locator import GammaMarketLocator
-from trader import PolymarketTrader
 from signal_analyzer import SignalAnalyzer
+from trader import PolymarketTrader
 
 
 def main() -> int:
@@ -27,11 +27,15 @@ def main() -> int:
     LOGGER.info("version      = %s", config.bot_version)
     LOGGER.info("dry_run      = %s", config.dry_run)
     LOGGER.info("strategy_mode= %s", config.strategy_mode)
-    LOGGER.info("signal_preset= %s", config.signal_preset)
-    if config.signal_preset == "w1":
-        LOGGER.info("strategy preset= W1 (live-ready)")
-    else:
-        LOGGER.info("strategy preset= %s", config.signal_preset)
+    if config.strategy_mode == "wd":
+        LOGGER.info("strategy_id  = %s", "WD_wallet_strict_v1")
+    elif config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}:
+        LOGGER.info(
+            "strategy_id  = %s",
+            "BTC_VOLUME_T10_hybrid_v2" if config.strategy_mode == "volume_t10_hybrid" else "BTC_VOLUME_T10_dual_v1",
+        )
+    elif config.strategy_mode == "signal_only":
+        LOGGER.info("signal_preset= %s", config.signal_preset)
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)
     LOGGER.info("budget cap   = $%.2f", config.strategy_budget_cap_usdc)
@@ -47,15 +51,17 @@ def main() -> int:
     trader = PolymarketTrader(config)
     engine = Btc15RedeemEngine(config, locator, trader)
 
-    signals = SignalAnalyzer(signal_preset=config.signal_preset)
-    signals.attach(engine)
+    signals: SignalAnalyzer | None = None
     if config.strategy_mode == "signal_only":
-        LOGGER.info("Signal analyzer attached (LIVE — placing orders on signals)")
+        signals = SignalAnalyzer(signal_preset=config.signal_preset)
+        signals.attach(engine)
+        LOGGER.info("Signal analyzer attached (LIVE placing orders on signals)")
     else:
-        LOGGER.info("Signal analyzer attached (log-only alongside %s)", config.strategy_mode)
+        LOGGER.info("Signal analyzer disabled for strategy_mode=%s", config.strategy_mode)
 
     engine.run()
-    signals.stop()
+    if signals is not None:
+        signals.stop()
     return 0
 
 
