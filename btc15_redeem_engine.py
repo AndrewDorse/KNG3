@@ -40,6 +40,16 @@ BTC_PERP15_PROFILE_ID = "BTC_PERP15_v1"
 STRATEGY_PROFILE_ID = BTC_PERP15_PROFILE_ID
 
 
+def _is_fak_no_match_order_error(exc: BaseException) -> bool:
+    """True when CLOB rejected a FAK buy because nothing crossed (retry / GTC fallback)."""
+    msg = str(exc).lower()
+    if "no orders found to match" in msg and "fak" in msg:
+        return True
+    if "fak orders are partially filled or killed" in msg:
+        return True
+    return False
+
+
 def _load_mimic_search_params(path: Path) -> dict[str, float] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -3736,12 +3746,51 @@ class Btc15RedeemEngine:
 
         try:
             if order_type == "taker":
-                resp = self.trader.place_marketable_buy(
-                    token,
-                    limit_price,
-                    shares,
-                    fee_rate_bps=candidate.fee_rate_bps,
-                )
+                resp: dict[str, Any] | None = None
+                last_taker_exc: BaseException | None = None
+                for fak_attempt in range(2):
+                    try:
+                        resp = self.trader.place_marketable_buy(
+                            token,
+                            limit_price,
+                            shares,
+                            fee_rate_bps=candidate.fee_rate_bps,
+                        )
+                        break
+                    except Exception as taker_exc:
+                        last_taker_exc = taker_exc
+                        if _is_fak_no_match_order_error(taker_exc) and fak_attempt == 0:
+                            LOGGER.warning(
+                                "[ORDER FAK RETRY] %s | kind=%s | side=%s | limit=$%.2f | %s",
+                                contract.slug,
+                                candidate.kind,
+                                candidate.side_label,
+                                limit_price,
+                                taker_exc,
+                            )
+                            time.sleep(0.25)
+                            continue
+                        if _is_fak_no_match_order_error(taker_exc):
+                            LOGGER.warning(
+                                "[ORDER FAK→GTC] %s | kind=%s | side=%s | limit=$%.2f | resting limit: %s",
+                                contract.slug,
+                                candidate.kind,
+                                candidate.side_label,
+                                limit_price,
+                                taker_exc,
+                            )
+                            resp = self.trader.place_limit_buy(
+                                token,
+                                limit_price,
+                                shares,
+                                fee_rate_bps=candidate.fee_rate_bps,
+                                post_only=False,
+                            )
+                            order_type = "gtc"
+                            break
+                        raise
+                if resp is None:
+                    raise last_taker_exc if last_taker_exc else RuntimeError("FAK buy returned no response")
             else:
                 resp = self.trader.place_limit_buy(
                     token,
