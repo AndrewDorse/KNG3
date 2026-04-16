@@ -99,7 +99,7 @@ class BotConfig:
     signal_preset: str = "w1"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up
     strategy_mode: str = "volume_scalp_up"
-    # volume_scalp_up (and aliases): UP and DOWN; one primary per side; TP = avg entry + offset per side;
+    # volume_scalp_up (and aliases): UP and DOWN; one primary per side; TP = buy limit price on order + offset;
     # next entry on that side only after its scalp_tp fills. Entry price must be <= $0.80 (see engine constant).
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_shares: int = 6
