@@ -4,11 +4,15 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    volumes:
+      - bot_logs:/app/logs
+      - bot_exports:/app/exports
     environment:
       POLY_PRIVATE_KEY: ${POLY_PRIVATE_KEY}
       POLY_FUNDER: ${POLY_FUNDER}
       POLY_SIGNATURE_TYPE: ${POLY_SIGNATURE_TYPE:-1}
       POLY_DRY_RUN: ${POLY_DRY_RUN:-true}
+      BOT_VERSION: ${BOT_VERSION:-2026-04-15 19:10:00}
       RELAYER_API_KEY: ${RELAYER_API_KEY:-}
       RELAYER_SECRET: ${RELAYER_SECRET:-}
       RELAYER_PASSPHRASE: ${RELAYER_PASSPHRASE:-}
@@ -28,3 +32,7 @@ services:
       BOT_STRATEGY_ENTRY_DELAY_SECONDS: ${BOT_STRATEGY_ENTRY_DELAY_SECONDS:-35}
       BOT_STRATEGY_NEW_ORDER_CUTOFF_SECONDS: ${BOT_STRATEGY_NEW_ORDER_CUTOFF_SECONDS:-30}
       BOT_FORCE_EXIT_BEFORE_END_SECONDS: ${BOT_FORCE_EXIT_BEFORE_END_SECONDS:-15}
+
+volumes:
+  bot_logs:
+  bot_exports:

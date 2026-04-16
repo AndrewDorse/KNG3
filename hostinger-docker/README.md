@@ -34,6 +34,7 @@ Use these values when creating the app from GitHub:
 
 - Repository: this repo
 - Dockerfile path: `hostinger-docker/Dockerfile`
+- Build context: **repository root** (not the `hostinger-docker/` folder alone), so `COPY main.py` and friends resolve.
 - Start command: leave empty, use Dockerfile default
 - Port mapping: none needed
 

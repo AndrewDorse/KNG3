@@ -34,8 +34,16 @@ Use these values when creating the app from GitHub:
 
 - Repository: this repo
 - Dockerfile path: `hostinger-docker/Dockerfile`
+- Build context: repository **root** (so `COPY main.py` resolves). If your UI asks for context, set it to `.` / repo root, not `hostinger-docker/` alone.
 - Start command: leave empty, use Dockerfile default
 - Port mapping: none needed
+
+Local checks from repo root:
+
+```bash
+python -m py_compile main.py config.py btc15_redeem_engine.py
+docker build -f hostinger-docker/Dockerfile -t kng3-bot .
+```
 
 ## Environment Variables
 
