@@ -31,6 +31,8 @@ def main() -> int:
         LOGGER.info("strategy_id  = %s", "WD_wallet_strict_v1")
     elif config.strategy_mode == "volume_scalp_up":
         LOGGER.info("strategy_id  = %s", "BTC_VOLUME_SCALP_UP_v1")
+    elif config.strategy_mode == "btc_perp15":
+        LOGGER.info("strategy_id  = %s", "BTC_PERP15_v1")
     elif config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}:
         LOGGER.info(
             "strategy_id  = %s",
