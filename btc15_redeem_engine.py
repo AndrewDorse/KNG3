@@ -565,7 +565,8 @@ class Btc15RedeemEngine:
         return self.config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}
 
     def _strategy_mode_volume_scalp(self) -> bool:
-        return self.config.strategy_mode == "volume_scalp_up"
+        m = (self.config.strategy_mode or "").strip().lower().replace("-", "_")
+        return m in ("volume_scalp_up", "volume_scalp", "vol_scalp_up")
 
     def _strategy_mode_signal_only(self) -> bool:
         return self.config.strategy_mode == "signal_only"
@@ -1369,14 +1370,17 @@ class Btc15RedeemEngine:
         self._reconcile_exit_orders(contract, open_ids)
 
         if self._exit_mode_winner_side is not None:
-            self._ensure_exit_sell(
-                contract,
-                self._exit_mode_winner_side,
-                self._desired_exit_price(contract, self._exit_mode_winner_side, "tp"),
-                purpose="tp",
-            )
-            loser_side = "DOWN" if self._exit_mode_winner_side == "UP" else "UP"
-            if self._exit_mode_winner_side in self._fully_exited_sides:
+            ws = self._exit_mode_winner_side
+            # volume_scalp_up manages UP exits only via purpose=scalp_tp; generic winner TP is $0.99 and must not block scalp TP.
+            if not (self._strategy_mode_volume_scalp() and ws == "UP"):
+                self._ensure_exit_sell(
+                    contract,
+                    ws,
+                    self._desired_exit_price(contract, ws, "tp"),
+                    purpose="tp",
+                )
+            loser_side = "DOWN" if ws == "UP" else "UP"
+            if ws in self._fully_exited_sides:
                 salvage_price = self._desired_exit_price(contract, loser_side, "salvage")
                 self._ensure_exit_sell(contract, loser_side, salvage_price, purpose="salvage")
         self._force_late_exit_cleanup(contract)
@@ -1512,7 +1516,10 @@ class Btc15RedeemEngine:
             if managed.shares == live_balance and abs(managed.price - desired_price) < 0.001:
                 managed.placed_at = now
                 continue
-            self._cancel_order_safe(managed.order_id, reason=f"exit-reconcile-{managed.purpose}")
+            if managed.order_id in self._order_map:
+                self._cancel_order_safe(managed.order_id, reason=f"exit-reconcile-{managed.purpose}")
+            else:
+                self._cancel_venue_order(managed.order_id, reason=f"exit-reconcile-{managed.purpose}")
             managed.cancel_requested_at = now
             LOGGER.info(
                 "[EXIT RECONCILE] %s | side=%s | purpose=%s | old_shares=%d | new_shares=%d | old=$%.2f | new=$%.2f | age=%.1fs",
@@ -1541,7 +1548,10 @@ class Btc15RedeemEngine:
             active = self._exit_orders_by_side.get(side_label)
             if active is not None:
                 if active.cancel_requested_at is None:
-                    self._cancel_order_safe(active.order_id, reason="force-exit-cleanup")
+                    if active.order_id in self._order_map:
+                        self._cancel_order_safe(active.order_id, reason="force-exit-cleanup")
+                    else:
+                        self._cancel_venue_order(active.order_id, reason="force-exit-cleanup")
                     active.cancel_requested_at = time.time()
                     LOGGER.info(
                         "[FORCE EXIT WAIT] %s | side=%s | waiting for tp cancel before cleanup",
@@ -1573,6 +1583,12 @@ class Btc15RedeemEngine:
 
     def _ensure_exit_sell(self, contract: ActiveContract, side_label: str, price: float, purpose: str) -> None:
         if side_label in self._fully_exited_sides:
+            return
+        if self._strategy_mode_volume_scalp() and side_label == "UP" and purpose == "tp":
+            LOGGER.warning(
+                "[EXIT SKIP] %s | volume_scalp_up forbids generic tp on UP (use scalp_tp only)",
+                contract.slug,
+            )
             return
         active = self._exit_orders_by_side.get(side_label)
         if active is not None:
@@ -2000,8 +2016,6 @@ class Btc15RedeemEngine:
         up_d = self._token_delta(contract.up, self._baseline_up_balance)
         if up_d <= VOLUME_T10_SERIAL_INVENTORY_EPS:
             return
-        if "UP" in self._exit_orders_by_side:
-            return
         if self._up_shares < 1:
             return
         cost_avg = self._up_spend / float(self._up_shares)
@@ -2010,7 +2024,24 @@ class Btc15RedeemEngine:
         if ref is not None and ref > 0 and cost_avg > ref + 0.20:
             basis = cost_avg
         off = self._volume_scalp_tp_offset_dollars()
-        tp = round(min(0.99, basis + off), 2)
+        want_tp = round(min(0.99, basis + off), 2)
+
+        up_managed = self._exit_orders_by_side.get("UP")
+        if up_managed is not None:
+            ok = up_managed.purpose == "scalp_tp" and abs(up_managed.price - want_tp) <= 0.02
+            if ok:
+                return
+            LOGGER.warning(
+                "[SCALP TP REPLACE] %s | cancel UP exit purpose=%s price=$%.2f (want scalp_tp $%.2f)",
+                contract.slug,
+                up_managed.purpose,
+                up_managed.price,
+                want_tp,
+            )
+            self._cancel_venue_order(up_managed.order_id, reason="scalp-tp-replace")
+            self._exit_orders_by_side.pop("UP", None)
+            self._fully_exited_sides.discard("UP")
+
         LOGGER.info(
             "[SCALP TP ARM] %s | basis=$%.4f | cost_avg=$%.4f | ref=%s | offset=$%.4f | tp=$%.2f",
             contract.slug,
@@ -2018,9 +2049,9 @@ class Btc15RedeemEngine:
             cost_avg,
             f"${ref:.4f}" if ref is not None else "n/a",
             off,
-            tp,
+            want_tp,
         )
-        self._ensure_exit_sell(contract, "UP", tp, purpose="scalp_tp")
+        self._ensure_exit_sell(contract, "UP", want_tp, purpose="scalp_tp")
 
     def _choose_volume_scalp_candidate(
         self,
@@ -3380,6 +3411,18 @@ class Btc15RedeemEngine:
             if order_id:
                 live_ids.add(order_id)
         return live_ids
+
+    def _cancel_venue_order(self, order_id: str, reason: str) -> None:
+        """Cancel by exchange id. Exit sells are not in `_order_map`, so this is used for those ids."""
+        if not order_id:
+            return
+        if self.config.dry_run:
+            LOGGER.info("[DRY VENUE CANCEL] order=%s | reason=%s", order_id[:16], reason)
+            return
+        try:
+            self.trader.cancel_order(order_id)
+        except Exception as exc:
+            LOGGER.warning("[VENUE CANCEL FAILED] order=%s | reason=%s | %s", order_id[:16], reason, exc)
 
     def _cancel_order_safe(self, order_id: str, reason: str) -> None:
         order = self._order_map.get(order_id)
