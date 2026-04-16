@@ -1295,8 +1295,13 @@ class Btc15RedeemEngine:
         ):
             self._volume_scalp_cycle_armed[order.side_label] = True
             self._fully_exited_sides.discard(order.side_label)
-            if 0 < float(order.price) < 1:
-                self._volume_scalp_entry_reference_px[order.side_label] = float(order.price)
+            # Anchor TP to effective entry: min(order limit, actual avg fill) so a high cap (e.g. $0.80) does not force TP to $0.92 when fills ~$0.72.
+            if order.shares >= 1 and order.notional > 0:
+                fill_avg = order.notional / float(order.shares)
+                lim = float(order.price)
+                anchor = round(min(lim, fill_avg), 2) if lim > 0 else round(fill_avg, 2)
+                if 0 < anchor < 1:
+                    self._volume_scalp_entry_reference_px[order.side_label] = anchor
 
         LOGGER.info(
             "[FILL] %s | kind=%s | side=%s | price=$%.2f | shares=%d | spend=$%.2f | reason=%s",
@@ -1611,7 +1616,7 @@ class Btc15RedeemEngine:
             if limit_tp is not None:
                 if abs(limit_tp - price) > 0.005:
                     LOGGER.warning(
-                        "[EXIT TP BUY-LIMIT] %s | side=%s | overriding requested $%.4f with buy_limit+offset $%.2f",
+                        "[EXIT TP ANCHOR] %s | side=%s | overriding requested $%.4f with entry_anchor+offset $%.2f",
                         contract.slug,
                         side_label,
                         price,
@@ -2065,14 +2070,14 @@ class Btc15RedeemEngine:
         return max(0.01, min(raw, 0.50))
 
     def _volume_scalp_tp_from_buy_limit(self, side_label: str) -> float | None:
-        """TP limit = scalp buy limit price + offset (same price stored on the buy order, not fill average)."""
+        """TP = entry anchor + offset. Anchor is min(signal limit, ref) at place and min(limit, fill avg) on fill."""
         if not self._strategy_mode_volume_scalp():
             return None
-        buy_limit = self._volume_scalp_entry_reference_px.get(side_label)
-        if buy_limit is None or not (0 < float(buy_limit) < 1):
+        anchor = self._volume_scalp_entry_reference_px.get(side_label)
+        if anchor is None or not (0 < float(anchor) < 1):
             return None
         off = self._volume_scalp_tp_offset_dollars()
-        return round(min(0.99, float(buy_limit) + off), 2)
+        return round(min(0.99, float(anchor) + off), 2)
 
     def _maybe_volume_scalp_arm_take_profit(self, contract: ActiveContract) -> None:
         if not self._strategy_mode_volume_scalp():
@@ -2089,7 +2094,7 @@ class Btc15RedeemEngine:
         shares = self._up_shares if side_label == "UP" else self._down_shares
         if shares < 1:
             return
-        buy_limit = self._volume_scalp_entry_reference_px.get(side_label)
+        entry_anchor = self._volume_scalp_entry_reference_px.get(side_label)
         want_tp = self._volume_scalp_tp_from_buy_limit(side_label)
         if want_tp is None:
             return
@@ -2113,10 +2118,10 @@ class Btc15RedeemEngine:
 
         off = self._volume_scalp_tp_offset_dollars()
         LOGGER.info(
-            "[SCALP TP ARM] %s | side=%s | buy_limit=$%.4f | offset=$%.4f | tp=$%.2f (buy_limit+offset)",
+            "[SCALP TP ARM] %s | side=%s | entry_anchor=$%.4f | offset=$%.4f | tp=$%.2f (anchor+offset)",
             contract.slug,
             side_label,
-            float(buy_limit) if buy_limit is not None else 0.0,
+            float(entry_anchor) if entry_anchor is not None else 0.0,
             off,
             want_tp,
         )
@@ -3280,7 +3285,10 @@ class Btc15RedeemEngine:
                 self._volume_t10_trade_tag = candidate.strategy_tag
             sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
             if sl is not None and self._strategy_mode_volume_scalp():
-                self._volume_scalp_entry_reference_px[sl] = float(limit_price)
+                self._volume_scalp_entry_reference_px[sl] = round(
+                    min(float(limit_price), float(candidate.reference_price)),
+                    2,
+                )
             LOGGER.info(
                 "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | post_only=%s | reason=%s",
                 order_kind,
@@ -3350,7 +3358,10 @@ class Btc15RedeemEngine:
             self._volume_t10_trade_tag = candidate.strategy_tag
         sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
         if sl is not None and self._strategy_mode_volume_scalp():
-            self._volume_scalp_entry_reference_px[sl] = float(limit_price)
+            self._volume_scalp_entry_reference_px[sl] = round(
+                min(float(limit_price), float(candidate.reference_price)),
+                2,
+            )
         LOGGER.info(
             "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | exec=%s | post_only=%s | reason=%s",
             order_kind,
