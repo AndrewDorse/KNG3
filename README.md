@@ -73,22 +73,22 @@ Before switching out of dry-run:
 
 - verify all secrets are set in Hostinger
 - keep `POLY_DRY_RUN=true` for the first deployment
-- check logs for market discovery, BTC polling, and `volume_t10_hybrid` strategy startup
+- check logs for market discovery, BTC polling, and `volume_scalp_up` strategy startup
 - only then flip `POLY_DRY_RUN=false`
 
 ## Strategy Note
 
-The deployment example now points at `BOT_STRATEGY_MODE=volume_t10_hybrid`.
+The deployment example now points at `BOT_STRATEGY_MODE=volume_scalp_up`.
 This mode runs:
 
-- volume-first entries from `60s` to `600s` using BTC volume spike + BTC direction
-- late T-10 hybrid execution from `20s` to `3s` remaining
-- live patch: hybrid entries are currently `UP`-only
-- live patch: hybrid entries use fixed `6` shares
-- max `1` trade per market
+- volume spike entries from `60s` to `840s`
+- `UP`-only entries using BTC direction confirmation
+- immediate scalp TP sells at average entry `+ $0.12`
+- fixed `6` shares
+- max `4` entries per market
 
 The live runtime still uses the repo's existing poll-based BTC and order-book access, not a streaming L2 WebSocket plant.
-In `volume_t10_hybrid` mode, `main.py` does not attach the signal analyzer.
+In `volume_scalp_up` mode, `main.py` does not attach the signal analyzer.
 
 If you switch to `mimic_lot`, the bot may look for:
 

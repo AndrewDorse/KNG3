@@ -79,8 +79,8 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid
-    strategy_mode: str = "volume_t10_hybrid"
+    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up
+    strategy_mode: str = "volume_scalp_up"
 
     @property
     def window_size_seconds(self) -> int:
@@ -170,7 +170,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=os.getenv("BOT_STRATEGY_MODE", "volume_t10_hybrid").strip().lower(),
+            strategy_mode=os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up").strip().lower(),
         )
 
 
