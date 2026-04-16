@@ -566,7 +566,15 @@ class Btc15RedeemEngine:
 
     def _strategy_mode_volume_scalp(self) -> bool:
         m = (self.config.strategy_mode or "").strip().lower().replace("-", "_")
-        return m in ("volume_scalp_up", "volume_scalp", "vol_scalp_up")
+        if m in ("volume_scalp_up", "volume_scalp", "vol_scalp_up"):
+            return True
+        if "t10" in m:
+            return False
+        if "scalp" in m and "volume" in m:
+            return True
+        if m in ("scalp_up", "btc_volume_scalp", "vol_scalp"):
+            return True
+        return False
 
     def _strategy_mode_signal_only(self) -> bool:
         return self.config.strategy_mode == "signal_only"
@@ -1287,6 +1295,10 @@ class Btc15RedeemEngine:
         ):
             self._volume_scalp_cycle_armed[order.side_label] = True
             self._fully_exited_sides.discard(order.side_label)
+            if order.shares >= 1 and order.notional > 0:
+                fill_px = order.notional / float(order.shares)
+                if 0 < fill_px < 1:
+                    self._volume_scalp_entry_reference_px[order.side_label] = fill_px
 
         LOGGER.info(
             "[FILL] %s | kind=%s | side=%s | price=$%.2f | shares=%d | spend=$%.2f | reason=%s",
@@ -1322,6 +1334,9 @@ class Btc15RedeemEngine:
 
     def _run_take_profit_phase(self, contract: ActiveContract) -> None:
         if self._strategy_mode_volume_scalp():
+            return
+        raw = (self.config.strategy_mode or "").lower()
+        if "scalp" in raw and "volume" in raw and "t10" not in raw:
             return
         self._enter_exit_mode(contract, reason=f"late tp phase at ${TP_PRICE:.2f}")
         if self._exit_mode_winner_side is None:
@@ -1593,6 +1608,18 @@ class Btc15RedeemEngine:
                 contract.slug,
             )
             return
+        if purpose == "scalp_tp" and self._strategy_mode_volume_scalp():
+            ledger_tp = self._volume_scalp_ledger_tp_for_side(side_label)
+            if ledger_tp is not None:
+                if abs(ledger_tp - price) > 0.005:
+                    LOGGER.warning(
+                        "[EXIT TP LEDGER] %s | side=%s | overriding requested $%.4f with fill-avg+offset $%.2f",
+                        contract.slug,
+                        side_label,
+                        price,
+                        ledger_tp,
+                    )
+                price = ledger_tp
         active = self._exit_orders_by_side.get(side_label)
         if active is not None:
             return
@@ -1632,6 +1659,13 @@ class Btc15RedeemEngine:
         price: float,
         purpose: str,
     ) -> str | None:
+        if self._strategy_mode_volume_scalp() and purpose == "tp":
+            LOGGER.warning(
+                "[EXIT BLOCK] %s | refuse generic tp limit sell in volume_scalp (would be $%.2f)",
+                contract.slug,
+                price,
+            )
+            return None
         attempt_size = size
         attempts = 0
         while attempt_size >= 1 and attempts < 8:
@@ -2032,6 +2066,20 @@ class Btc15RedeemEngine:
             raw = raw / 100.0
         return max(0.01, min(raw, 0.50))
 
+    def _volume_scalp_ledger_tp_for_side(self, side_label: str) -> float | None:
+        """Limit TP from internal fill average + offset only (avoids bogus $0.99 from bad reference/limit)."""
+        if not self._strategy_mode_volume_scalp():
+            return None
+        shares = self._up_shares if side_label == "UP" else self._down_shares
+        spend = self._up_spend if side_label == "UP" else self._down_spend
+        if shares < 1:
+            return None
+        cost_avg = spend / float(shares)
+        if not (0 < cost_avg < 1):
+            return None
+        off = self._volume_scalp_tp_offset_dollars()
+        return round(min(0.99, cost_avg + off), 2)
+
     def _maybe_volume_scalp_arm_take_profit(self, contract: ActiveContract) -> None:
         if not self._strategy_mode_volume_scalp():
             return
@@ -2050,11 +2098,9 @@ class Btc15RedeemEngine:
             return
         cost_avg = spend / float(shares)
         ref = self._volume_scalp_entry_reference_px.get(side_label)
-        basis = float(ref) if ref is not None and ref > 0 else cost_avg
-        if ref is not None and ref > 0 and cost_avg > ref + 0.20:
-            basis = cost_avg
-        off = self._volume_scalp_tp_offset_dollars()
-        want_tp = round(min(0.99, basis + off), 2)
+        want_tp = self._volume_scalp_ledger_tp_for_side(side_label)
+        if want_tp is None:
+            return
 
         managed = self._exit_orders_by_side.get(side_label)
         if managed is not None:
@@ -2073,11 +2119,11 @@ class Btc15RedeemEngine:
             self._exit_orders_by_side.pop(side_label, None)
             self._fully_exited_sides.discard(side_label)
 
+        off = self._volume_scalp_tp_offset_dollars()
         LOGGER.info(
-            "[SCALP TP ARM] %s | side=%s | basis=$%.4f | cost_avg=$%.4f | ref=%s | offset=$%.4f | tp=$%.2f",
+            "[SCALP TP ARM] %s | side=%s | cost_avg=$%.4f | ref=%s | offset=$%.4f | tp=$%.2f",
             contract.slug,
             side_label,
-            basis,
             cost_avg,
             f"${ref:.4f}" if ref is not None else "n/a",
             off,

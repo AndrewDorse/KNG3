@@ -30,6 +30,24 @@ class BotConfigError(RuntimeError):
     pass
 
 
+def _normalize_strategy_mode(raw: str | None) -> str:
+    """Canonicalize strategy_mode so volume-scalp variants always match engine guards (avoids late $0.99 TP)."""
+    s = (raw or "volume_scalp_up").strip().lower()
+    for ch in ("\r", "\n", "\t"):
+        s = s.replace(ch, "")
+    s = s.replace("-", "_")
+    s = "_".join(s.split())
+    if s in ("volume_scalp_up", "volume_scalp", "vol_scalp_up"):
+        return "volume_scalp_up"
+    if "t10" in s:
+        return s
+    if "scalp" in s and "volume" in s:
+        return "volume_scalp_up"
+    if s in ("scalp_up", "btc_volume_scalp", "vol_scalp", "volumescalp"):
+        return "volume_scalp_up"
+    return s
+
+
 @dataclass(slots=True)
 class BotConfig:
     private_key: str
@@ -181,7 +199,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up").strip().lower(),
+            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up")),
             volume_scalp_tp_offset=volume_scalp_tp_raw,
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),
             volume_scalp_entry_min_elapsed=max(0, _env_int("BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED", 60)),
