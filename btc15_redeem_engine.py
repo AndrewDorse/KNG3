@@ -372,6 +372,7 @@ class ManagedOrder:
 
     @property
     def notional(self) -> float:
+        """Planned outlay at order limit price × shares — not venue fill proceeds (do not use as fill avg)."""
         return self.price * self.shares
 
 
@@ -503,6 +504,7 @@ class Btc15RedeemEngine:
         self._volume_t10_trade_tag: str | None = None
         self._volume_scalp_eligible_next: dict[str, bool] = {"UP": True, "DOWN": True}
         self._volume_scalp_cycle_armed: dict[str, bool] = {"UP": False, "DOWN": False}
+        # Scalp entry hint per side; TP = min(hint, live px, ledger avg) + offset — see _volume_scalp_effective_entry_anchor.
         self._volume_scalp_entry_reference_px: dict[str, float | None] = {"UP": None, "DOWN": None}
 
         self._order_map: dict[str, ManagedOrder] = {}
@@ -1295,11 +1297,14 @@ class Btc15RedeemEngine:
         ):
             self._volume_scalp_cycle_armed[order.side_label] = True
             self._fully_exited_sides.discard(order.side_label)
-            # Anchor TP to effective entry: min(order limit, actual avg fill) so a high cap (e.g. $0.80) does not force TP to $0.92 when fills ~$0.72.
-            if order.shares >= 1 and order.notional > 0:
-                fill_avg = order.notional / float(order.shares)
-                lim = float(order.price)
-                anchor = round(min(lim, fill_avg), 2) if lim > 0 else round(fill_avg, 2)
+            # notional is price×shares (cap), NOT true fill — use last side quote vs limit for anchor.
+            lim = float(order.price)
+            mkt = self._side_price(order.side_label)
+            parts = [lim] if lim > 0 else []
+            if mkt > 0 and mkt < 1:
+                parts.append(mkt)
+            if parts:
+                anchor = round(min(parts), 2)
                 if 0 < anchor < 1:
                     self._volume_scalp_entry_reference_px[order.side_label] = anchor
 
@@ -2069,15 +2074,34 @@ class Btc15RedeemEngine:
             raw = raw / 100.0
         return max(0.01, min(raw, 0.50))
 
+    def _volume_scalp_effective_entry_anchor(self, side_label: str) -> float | None:
+        """$/sh for TP: min(stored place/fill hint, live last side px, ledger avg). Caps wrong 0.80 when mkt ~0.72."""
+        parts: list[float] = []
+        stored = self._volume_scalp_entry_reference_px.get(side_label)
+        if stored is not None and 0 < float(stored) < 1:
+            parts.append(float(stored))
+        mkt = self._side_price(side_label)
+        if mkt > 0 and mkt < 1:
+            parts.append(float(mkt))
+        shares = self._up_shares if side_label == "UP" else self._down_shares
+        spend = self._up_spend if side_label == "UP" else self._down_spend
+        if shares >= 1 and spend > 0:
+            avg = spend / float(shares)
+            if 0 < avg < 1:
+                parts.append(float(avg))
+        if not parts:
+            return None
+        return min(parts)
+
     def _volume_scalp_tp_from_buy_limit(self, side_label: str) -> float | None:
-        """TP = entry anchor + offset. Anchor is min(signal limit, ref) at place and min(limit, fill avg) on fill."""
+        """TP = effective entry anchor + offset (anchor reconciles stored cap vs market vs ledger)."""
         if not self._strategy_mode_volume_scalp():
             return None
-        anchor = self._volume_scalp_entry_reference_px.get(side_label)
-        if anchor is None or not (0 < float(anchor) < 1):
+        anchor = self._volume_scalp_effective_entry_anchor(side_label)
+        if anchor is None or not (0 < anchor < 1):
             return None
         off = self._volume_scalp_tp_offset_dollars()
-        return round(min(0.99, float(anchor) + off), 2)
+        return round(min(0.99, anchor + off), 2)
 
     def _maybe_volume_scalp_arm_take_profit(self, contract: ActiveContract) -> None:
         if not self._strategy_mode_volume_scalp():
@@ -2094,7 +2118,7 @@ class Btc15RedeemEngine:
         shares = self._up_shares if side_label == "UP" else self._down_shares
         if shares < 1:
             return
-        entry_anchor = self._volume_scalp_entry_reference_px.get(side_label)
+        eff_anchor = self._volume_scalp_effective_entry_anchor(side_label)
         want_tp = self._volume_scalp_tp_from_buy_limit(side_label)
         if want_tp is None:
             return
@@ -2121,7 +2145,7 @@ class Btc15RedeemEngine:
             "[SCALP TP ARM] %s | side=%s | entry_anchor=$%.4f | offset=$%.4f | tp=$%.2f (anchor+offset)",
             contract.slug,
             side_label,
-            float(entry_anchor) if entry_anchor is not None else 0.0,
+            float(eff_anchor) if eff_anchor is not None else 0.0,
             off,
             want_tp,
         )
@@ -3285,10 +3309,11 @@ class Btc15RedeemEngine:
                 self._volume_t10_trade_tag = candidate.strategy_tag
             sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
             if sl is not None and self._strategy_mode_volume_scalp():
-                self._volume_scalp_entry_reference_px[sl] = round(
-                    min(float(limit_price), float(candidate.reference_price)),
-                    2,
-                )
+                px_parts = [float(limit_price), float(candidate.reference_price)]
+                mx = self._side_price(candidate.side_label)
+                if mx > 0 and mx < 1:
+                    px_parts.append(mx)
+                self._volume_scalp_entry_reference_px[sl] = round(min(px_parts), 2)
             LOGGER.info(
                 "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | post_only=%s | reason=%s",
                 order_kind,
@@ -3358,10 +3383,11 @@ class Btc15RedeemEngine:
             self._volume_t10_trade_tag = candidate.strategy_tag
         sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
         if sl is not None and self._strategy_mode_volume_scalp():
-            self._volume_scalp_entry_reference_px[sl] = round(
-                min(float(limit_price), float(candidate.reference_price)),
-                2,
-            )
+            px_parts = [float(limit_price), float(candidate.reference_price)]
+            mx = self._side_price(candidate.side_label)
+            if mx > 0 and mx < 1:
+                px_parts.append(mx)
+            self._volume_scalp_entry_reference_px[sl] = round(min(px_parts), 2)
         LOGGER.info(
             "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | exec=%s | post_only=%s | reason=%s",
             order_kind,

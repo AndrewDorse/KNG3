@@ -99,7 +99,7 @@ class BotConfig:
     signal_preset: str = "w1"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up
     strategy_mode: str = "volume_scalp_up"
-    # volume_scalp_up: TP = entry_anchor + offset; anchor=min(limit,signal ref) at place, min(limit,fill avg) on fill.
+    # volume_scalp_up: TP = min(stored hint, last side px, ledger avg) + offset — ManagedOrder.notional is not fill outlay.
     # next entry on that side only after its scalp_tp fills. Entry price must be <= $0.80 (see engine constant).
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_shares: int = 6
