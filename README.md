@@ -67,28 +67,25 @@ Recommended:
 - keep `logs` persistent
 - keep `exports` persistent if you want snapshots, reports, or strategy artifacts to survive redeploys
 
-## Strategy Note
+## Go live checklist
 
-Before switching out of dry-run:
+1. Set `POLY_PRIVATE_KEY`, `POLY_FUNDER`, and (if needed) relayer env vars in Hostinger only — never in Git.
+2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `volume_scalp_up`.
+3. When satisfied, set `POLY_DRY_RUN=false` and redeploy so the bot places real orders.
 
-- verify all secrets are set in Hostinger
-- keep `POLY_DRY_RUN=true` for the first deployment
-- check logs for market discovery, BTC polling, and `volume_scalp_up` strategy startup
-- only then flip `POLY_DRY_RUN=false`
+## Strategy note (`volume_scalp_up`)
 
-## Strategy Note
+The deployment example uses `BOT_STRATEGY_MODE=volume_scalp_up`. Behavior:
 
-The deployment example now points at `BOT_STRATEGY_MODE=volume_scalp_up`.
-This mode runs:
+- One UP entry at a time (no overlapping buys); serial gate uses wallet token deltas vs window baseline.
+- Volume spike + BTC up from window open; entry elapsed window defaults `60s`–`840s` (tune with `BOT_VOLUME_SCALP_*`).
+- After a fill, a limit sell is placed at **average entry + `BOT_VOLUME_SCALP_TP_OFFSET`** (default `0.12`, capped at `0.99`).
+- A **new** scalp in the same 15m window is allowed only after that **scalp TP** order fills. If UP goes flat without that TP, the bot stops further entries until the **next** window.
+- No forced market dump at expiry for this mode: if TP does not fill, inventory is left for normal settlement/redeem.
 
-- volume spike entries from `60s` to `840s`
-- `UP`-only entries using BTC direction confirmation
-- immediate scalp TP sells at average entry `+ $0.12`
-- fixed `6` shares
-- max `4` entries per market
+Optional env vars: `BOT_VOLUME_SCALP_TP_OFFSET`, `BOT_VOLUME_SCALP_SHARES`, `BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED`, `BOT_VOLUME_SCALP_ENTRY_MAX_ELAPSED`, `BOT_VOLUME_SCALP_VOLUME_RATIO`.
 
-The live runtime still uses the repo's existing poll-based BTC and order-book access, not a streaming L2 WebSocket plant.
-In `volume_scalp_up` mode, `main.py` does not attach the signal analyzer.
+The live runtime uses the repo’s poll-based BTC feed and CLOB access (not a streaming L2 WebSocket). In this mode, `main.py` does not attach the signal analyzer.
 
 If you switch to `mimic_lot`, the bot may look for:
 

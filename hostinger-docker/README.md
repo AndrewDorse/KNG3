@@ -67,28 +67,17 @@ Recommended:
 - keep `logs` persistent
 - keep `exports` persistent if you want snapshots, reports, or strategy artifacts to survive redeploys
 
-## Strategy Note
+## Go live checklist
 
-Before switching out of dry-run:
+1. Set secrets only in Hostinger env (never in Git).
+2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `volume_scalp_up`.
+3. Set `POLY_DRY_RUN=false` to trade for real.
 
-- verify all secrets are set in Hostinger
-- keep `POLY_DRY_RUN=true` for the first deployment
-- check logs for market discovery, BTC polling, and `volume_scalp_up` strategy startup
-- only then flip `POLY_DRY_RUN=false`
+## Strategy note (`volume_scalp_up`)
 
-## Strategy Note
+One UP scalp at a time; TP limit at avg entry + offset (see `BOT_VOLUME_SCALP_*` in `.env.example`). The next scalp in the same window is allowed only after that TP fills. Optional tuning: `BOT_VOLUME_SCALP_TP_OFFSET`, `BOT_VOLUME_SCALP_SHARES`, entry elapsed bounds, `BOT_VOLUME_SCALP_VOLUME_RATIO`.
 
-The deployment example now points at `BOT_STRATEGY_MODE=volume_scalp_up`.
-This mode runs:
-
-- volume spike entries from `60s` to `840s`
-- `UP`-only entries using BTC direction confirmation
-- immediate scalp TP sells at average entry `+ $0.12`
-- fixed `6` shares
-- max `4` entries per market
-
-The live runtime still uses the repo's existing poll-based BTC and order-book access, not a streaming L2 WebSocket plant.
-In `volume_scalp_up` mode, `main.py` does not attach the signal analyzer.
+Poll-based BTC and CLOB only; `main.py` does not attach the signal analyzer in this mode.
 
 If you switch to `mimic_lot`, the bot may look for:
 
