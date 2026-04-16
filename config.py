@@ -129,6 +129,10 @@ class BotConfig:
         else:
             ladder_prices = [0.44, 0.34, 0.24, 0.14]
 
+        volume_scalp_tp_raw = _env_float("BOT_VOLUME_SCALP_TP_OFFSET", 0.12)
+        if volume_scalp_tp_raw > 1.0:
+            volume_scalp_tp_raw = volume_scalp_tp_raw / 100.0
+
         return cls(
             private_key=private_key,
             funder=funder,
@@ -177,7 +181,7 @@ class BotConfig:
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
             strategy_mode=os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up").strip().lower(),
-            volume_scalp_tp_offset=_env_float("BOT_VOLUME_SCALP_TP_OFFSET", 0.12),
+            volume_scalp_tp_offset=volume_scalp_tp_raw,
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),
             volume_scalp_entry_min_elapsed=max(0, _env_int("BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED", 60)),
             volume_scalp_entry_max_elapsed=max(1, _env_int("BOT_VOLUME_SCALP_ENTRY_MAX_ELAPSED", 840)),

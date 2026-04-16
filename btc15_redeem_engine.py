@@ -503,6 +503,7 @@ class Btc15RedeemEngine:
         self._volume_t10_trade_tag: str | None = None
         self._volume_scalp_up_eligible_next = True
         self._volume_scalp_up_cycle_armed = False
+        self._volume_scalp_entry_reference_px: float | None = None
 
         self._order_map: dict[str, ManagedOrder] = {}
         self._orders_placed = 0
@@ -880,6 +881,7 @@ class Btc15RedeemEngine:
         self._volume_t10_trade_tag = None
         self._volume_scalp_up_eligible_next = True
         self._volume_scalp_up_cycle_armed = False
+        self._volume_scalp_entry_reference_px = None
 
         self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
         self._baseline_down_balance = self.trader.token_balance(contract.down.token_id)
@@ -1317,6 +1319,8 @@ class Btc15RedeemEngine:
             LOGGER.info("[CANCEL] %s | order=%s | reason=%s", contract.slug, order_id[:16], reason)
 
     def _run_take_profit_phase(self, contract: ActiveContract) -> None:
+        if self._strategy_mode_volume_scalp():
+            return
         self._enter_exit_mode(contract, reason=f"late tp phase at ${TP_PRICE:.2f}")
         if self._exit_mode_winner_side is None:
             self._ensure_exit_sell(contract, "UP", TP_PRICE, purpose="tp")
@@ -1983,6 +1987,13 @@ class Btc15RedeemEngine:
             return "primary entry order still open"
         return None
 
+    def _volume_scalp_tp_offset_dollars(self) -> float:
+        """TP step in share price units (0–1). Env typo `12` meaning 12¢ is normalized to `0.12`."""
+        raw = float(self.config.volume_scalp_tp_offset)
+        if raw > 1.0:
+            raw = raw / 100.0
+        return max(0.01, min(raw, 0.50))
+
     def _maybe_volume_scalp_up_arm_take_profit(self, contract: ActiveContract) -> None:
         if not self._strategy_mode_volume_scalp():
             return
@@ -1993,8 +2004,22 @@ class Btc15RedeemEngine:
             return
         if self._up_shares < 1:
             return
-        avg = self._up_spend / float(self._up_shares)
-        tp = round(min(0.99, avg + self.config.volume_scalp_tp_offset), 2)
+        cost_avg = self._up_spend / float(self._up_shares)
+        ref = self._volume_scalp_entry_reference_px
+        basis = float(ref) if ref is not None and ref > 0 else cost_avg
+        if ref is not None and ref > 0 and cost_avg > ref + 0.20:
+            basis = cost_avg
+        off = self._volume_scalp_tp_offset_dollars()
+        tp = round(min(0.99, basis + off), 2)
+        LOGGER.info(
+            "[SCALP TP ARM] %s | basis=$%.4f | cost_avg=$%.4f | ref=%s | offset=$%.4f | tp=$%.2f",
+            contract.slug,
+            basis,
+            cost_avg,
+            f"${ref:.4f}" if ref is not None else "n/a",
+            off,
+            tp,
+        )
         self._ensure_exit_sell(contract, "UP", tp, purpose="scalp_tp")
 
     def _choose_volume_scalp_candidate(
@@ -3123,6 +3148,8 @@ class Btc15RedeemEngine:
             if candidate.strategy_tag and self._strategy_mode_volume_t10():
                 self._volume_t10_trade_taken = True
                 self._volume_t10_trade_tag = candidate.strategy_tag
+            if candidate.strategy_tag == "scalp_up" and self._strategy_mode_volume_scalp():
+                self._volume_scalp_entry_reference_px = float(candidate.reference_price)
             LOGGER.info(
                 "DRY [%s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | post_only=%s | reason=%s",
                 order_kind,
@@ -3190,6 +3217,8 @@ class Btc15RedeemEngine:
         if candidate.strategy_tag and self._strategy_mode_volume_t10():
             self._volume_t10_trade_taken = True
             self._volume_t10_trade_tag = candidate.strategy_tag
+        if candidate.strategy_tag == "scalp_up" and self._strategy_mode_volume_scalp():
+            self._volume_scalp_entry_reference_px = float(candidate.reference_price)
         LOGGER.info(
             "[ORDER %s] %s | side=%s | ref=$%.4f | limit=$%.2f | shares=%d | pair=%.3f | order=%s | exec=%s | post_only=%s | reason=%s",
             order_kind,
