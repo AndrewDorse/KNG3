@@ -78,22 +78,22 @@ Recommended:
 ## Go live checklist
 
 1. Set `POLY_PRIVATE_KEY`, `POLY_FUNDER`, and (if needed) relayer env vars in Hostinger only — never in Git.
-2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `volume_scalp_up`.
+2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `btc_perp15`.
 3. When satisfied, set `POLY_DRY_RUN=false` and redeploy so the bot places real orders.
 
-## Strategy note (`volume_scalp_up`)
+## Strategy note (`btc_perp15`)
 
-The deployment example uses `BOT_STRATEGY_MODE=volume_scalp_up`. Behavior:
+The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
 
-- One UP entry at a time (no overlapping buys); serial gate uses wallet token deltas vs window baseline.
-- Volume spike + BTC up from window open; entry elapsed window defaults `60s`–`840s` (tune with `BOT_VOLUME_SCALP_*`).
-- After a fill, a limit sell is placed at **average entry + `BOT_VOLUME_SCALP_TP_OFFSET`** (default `0.12`, capped at `0.99`).
-- A **new** scalp in the same 15m window is allowed only after that **scalp TP** order fills. If UP goes flat without that TP, the bot stops further entries until the **next** window.
-- No forced market dump at expiry for this mode: if TP does not fill, inventory is left for normal settlement/redeem.
+- Monitor the first `180s` of the window and sample BTC every `5s`.
+- Use BTC trend if it is strong enough; otherwise fall back to the cheaper side seen during monitoring.
+- Only enter when the chosen side is in the cheap-entry band `0.05` to `0.40`.
+- Place a `0.99` TP limit after entry.
+- If TP is still open, force-dump only in the final `5s` of the window.
 
-Optional env vars: `BOT_VOLUME_SCALP_TP_OFFSET`, `BOT_VOLUME_SCALP_SHARES`, `BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED`, `BOT_VOLUME_SCALP_ENTRY_MAX_ELAPSED`, `BOT_VOLUME_SCALP_VOLUME_RATIO`.
+Optional env vars: `BOT_PERP15_ENTRY_MIN`, `BOT_PERP15_ENTRY_MAX`, `BOT_PERP15_MONITOR_SECONDS`, `BOT_PERP15_SAMPLE_INTERVAL_SECONDS`, `BOT_PERP15_BTC_TREND_THRESHOLD`, `BOT_PERP15_TP_PRICE`, `BOT_PERP15_END_DUMP_SECONDS_REMAINING`, `BOT_PERP15_MIN_SHARES`.
 
-The live runtime uses the repo’s poll-based BTC feed and CLOB access (not a streaming L2 WebSocket). In this mode, `main.py` does not attach the signal analyzer.
+The live runtime uses the repo's poll-based BTC feed and CLOB access, not a streaming L2 WebSocket.
 
 If you switch to `mimic_lot`, the bot may look for:
 

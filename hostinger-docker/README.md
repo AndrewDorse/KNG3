@@ -71,14 +71,22 @@ Recommended:
 ## Go live checklist
 
 1. Set secrets only in Hostinger env (never in Git).
-2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `volume_scalp_up`.
+2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `btc_perp15`.
 3. Set `POLY_DRY_RUN=false` to trade for real.
 
-## Strategy note (`volume_scalp_up`)
+## Strategy note (`btc_perp15`)
 
-One UP scalp at a time; TP limit at avg entry + offset (see `BOT_VOLUME_SCALP_*` in `.env.example`). The next scalp in the same window is allowed only after that TP fills. Optional tuning: `BOT_VOLUME_SCALP_TP_OFFSET`, `BOT_VOLUME_SCALP_SHARES`, entry elapsed bounds, `BOT_VOLUME_SCALP_VOLUME_RATIO`.
+The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
 
-Poll-based BTC and CLOB only; `main.py` does not attach the signal analyzer in this mode.
+- Monitor the first `180s` of the window and sample BTC every `5s`
+- Use BTC trend if it is strong enough; otherwise take the cheaper side observed during monitoring
+- Only enter when the chosen side is between `0.05` and `0.40`
+- Rest a `0.99` TP limit after entry
+- If TP is still open, force-dump only in the last `5s`
+
+Optional tuning lives in `.env.example` under `BOT_PERP15_*`.
+
+Poll-based BTC and CLOB only.
 
 If you switch to `mimic_lot`, the bot may look for:
 
