@@ -35,7 +35,7 @@ MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
 WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
 VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
-VOLUME_SCALP_UP_STRATEGY_PROFILE_ID = "BTC_VOLUME_SCALP_UP_v1"
+VOLUME_SCALP_UP_PROFILE_ID = "BTC_VOLUME_SCALP_UP_v2"
 BTC_PERP15_PROFILE_ID = "BTC_PERP15_UP_LADDER_v3"
 STRATEGY_PROFILE_ID = BTC_PERP15_PROFILE_ID
 
@@ -290,10 +290,9 @@ VOLUME_AVG_LOOKBACK_SECONDS = 30
 VOLUME_RATIO_THRESHOLD = 2.5
 VOLUME_ENTRY_MIN_PRICE = 0.05
 VOLUME_ENTRY_MAX_PRICE = 0.90
-VOLUME_SCALP_MAX_ELAPSED_SECONDS = 840.0
-VOLUME_SCALP_ENTRY_MAX_PRICE = 0.80
-VOLUME_SCALP_TARGET_DELTA = 0.12
+# Treat smaller deltas as flat so dust after TP does not block the next cycle forever.
 VOLUME_T10_SERIAL_INVENTORY_EPS = 0.02
+VOLUME_SCALP_ENTRY_MAX_PRICE = 0.80
 T10_ENTRY_START_SECONDS_REMAINING = 20.0
 T10_ENTRY_END_SECONDS_REMAINING = 3.0
 T10_MIN_WINDOW_ELAPSED_SECONDS = 120.0
@@ -303,7 +302,6 @@ T10_ENTRY_MIN_PRICE = 0.05
 T10_ENTRY_MAX_PRICE = 0.95
 POSITION_MAX_PCT = 0.20
 POLY_MIN_LIMIT_SHARES = 5
-VOLUME_T10_FIXED_SHARES = 6
 MAKER_FEE_RATE_BPS = 50
 MAKER_PRICE_TICK = 0.01
 VOLUME_T10_TP_START_SECONDS_REMAINING = 60.0
@@ -332,6 +330,7 @@ LEFTOVER_CLEANUP_INTERVAL_SECONDS = 5.0
 # Flatten odd-lot window position: 0 < token_delta vs window baseline < 2 sh → FAK sell (per-side throttle below).
 SUB_TWO_SHARE_MAX_EXCLUSIVE = 2.0
 SUB_TWO_SHARE_MARKET_CHECK_SECONDS = 5.0
+# btc_perp15: min seconds between end-window market dump attempts per side (avoid spam).
 BTC_PERP15_END_DUMP_THROTTLE_SECONDS = 2.0
 EXIT_RECONCILE_INTERVAL_SECONDS = 30.0
 # "current" phase ramp (same as run_named_profiles strategy_0 / price-history replay).
@@ -516,11 +515,8 @@ class Btc15RedeemEngine:
         self._btc_price_history: list[BtcPricePoint] = []
         self._last_btc_feed_error_log: float = 0.0
         self._window_open_btc_price: float | None = None
-        self._volume_t10_trade_taken = False
-        self._volume_t10_trade_tag: str | None = None
-        self._volume_scalp_eligible_next: dict[str, bool] = {"UP": True, "DOWN": True}
-        self._volume_scalp_cycle_armed: dict[str, bool] = {"UP": False, "DOWN": False}
-        # Scalp entry hint per side; TP anchor prefers hint, then ledger avg, then live px — never min() with mkt (dip would sell below entry).
+        self._volume_scalp_entry_count: dict[str, int] = {"UP": 0, "DOWN": 0}
+        # Scalp entry hint per side (place/fill); TP anchor prefers hint, then ledger avg, then live px — never min() with mkt (dip would sell below entry).
         self._volume_scalp_entry_reference_px: dict[str, float | None] = {"UP": None, "DOWN": None}
 
         self._perp15_samples: list[tuple[float, float, float]] = []
@@ -595,7 +591,7 @@ class Btc15RedeemEngine:
     def _strategy_mode_volume_t10(self) -> bool:
         return self.config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}
 
-    def _strategy_mode_volume_scalp(self) -> bool:
+    def _strategy_mode_volume_scalp_up(self) -> bool:
         m = (self.config.strategy_mode or "").strip().lower().replace("-", "_")
         if m in ("volume_scalp_up", "volume_scalp", "vol_scalp_up"):
             return True
@@ -618,7 +614,7 @@ class Btc15RedeemEngine:
             self._strategy_mode_mimic()
             or self._strategy_mode_box_balance()
             or self._strategy_mode_volume_t10()
-            or self._strategy_mode_volume_scalp()
+            or self._strategy_mode_volume_scalp_up()
         )
 
     def _profile_label(self) -> str:
@@ -628,14 +624,14 @@ class Btc15RedeemEngine:
             return MIMIC_STRATEGY_PROFILE_ID
         if self._strategy_mode_wd():
             return WD_STRATEGY_PROFILE_ID
-        if self._strategy_mode_btc_perp15():
-            return BTC_PERP15_PROFILE_ID
-        if self._strategy_mode_volume_scalp():
-            return VOLUME_SCALP_UP_STRATEGY_PROFILE_ID
         if self._strategy_mode_volume_t10():
             if self.config.strategy_mode == "volume_t10_hybrid":
                 return VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID
             return VOLUME_T10_STRATEGY_PROFILE_ID
+        if self._strategy_mode_volume_scalp_up():
+            return VOLUME_SCALP_UP_PROFILE_ID
+        if self._strategy_mode_btc_perp15():
+            return BTC_PERP15_PROFILE_ID
         if self._strategy_mode_signal_only():
             return "SIGNAL_ANALYZER_v1"
         if self._strategy_mode_strategy_0():
@@ -761,6 +757,7 @@ class Btc15RedeemEngine:
         self._poll_prices(contract)
         self._detect_fills(contract, live_ids)
         self._maybe_market_sell_sub_two_share_inventory(contract)
+        self._maybe_volume_scalp_risk_exit(contract, seconds_remaining)
         self._maybe_volume_scalp_arm_take_profit(contract)
         self._cancel_stale_orders(contract, seconds_remaining)
         self._maybe_retry_window_balance(contract, elapsed, seconds_remaining)
@@ -769,7 +766,7 @@ class Btc15RedeemEngine:
         self._maybe_enter_early_exit_mode(contract)
         if (
             not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only()
-        ) or self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp() or self._strategy_mode_btc_perp15():
+        ) or self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
             self._manage_exit_orders(contract, open_orders)
             self._maybe_btc_perp15_end_window_market_dump(contract, seconds_remaining)
             self._cleanup_small_leftovers(contract, seconds_remaining, time.time())
@@ -782,7 +779,6 @@ class Btc15RedeemEngine:
         ) or (
             self._strategy_mode_volume_t10()
             and seconds_remaining <= VOLUME_T10_TP_START_SECONDS_REMAINING
-            and not self._strategy_mode_volume_scalp()
         ):
             self._run_take_profit_phase(contract)
 
@@ -797,7 +793,7 @@ class Btc15RedeemEngine:
                 f"waiting for balance settlement: budget ${self._window_budget_usdc:.2f} "
                 f"< tradable ${self._minimum_tradable_budget_usdc():.2f}"
             )
-        elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_volume_t10() and not self._strategy_mode_volume_scalp() and not self._strategy_mode_btc_perp15():
+        elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_volume_t10() and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15():
             self._no_signal_reason = "exit mode active"
         elif elapsed >= self.config.strategy_entry_delay_seconds:
             if self._strategy_mode_mimic():
@@ -825,14 +821,14 @@ class Btc15RedeemEngine:
                 elif self._no_signal_reason:
                     LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
             elif self._strategy_mode_volume_t10():
-                candidate = self._choose_volume_t10_candidate(snapshot, elapsed, seconds_remaining)
+                candidate = self._choose_volume_t10_candidate(contract, snapshot, elapsed, seconds_remaining)
                 if candidate is not None:
                     open_orders = self._get_contract_orders(contract)
                     if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
                         self._place_candidate(contract, candidate, snapshot, elapsed)
                 elif self._no_signal_reason:
                     LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
-            elif self._strategy_mode_volume_scalp():
+            elif self._strategy_mode_volume_scalp_up():
                 candidate = self._choose_volume_scalp_candidate(contract, snapshot, elapsed)
                 if candidate is not None:
                     open_orders = self._get_contract_orders(contract)
@@ -930,10 +926,7 @@ class Btc15RedeemEngine:
         self._last_btc_trade_count = 0
         self._btc_price_history.clear()
         self._window_open_btc_price = None
-        self._volume_t10_trade_taken = False
-        self._volume_t10_trade_tag = None
-        self._volume_scalp_eligible_next = {"UP": True, "DOWN": True}
-        self._volume_scalp_cycle_armed = {"UP": False, "DOWN": False}
+        self._volume_scalp_entry_count = {"UP": 0, "DOWN": 0}
         self._volume_scalp_entry_reference_px = {"UP": None, "DOWN": None}
         self._perp15_samples = []
         self._perp15_last_sample_ts = 0.0
@@ -1082,10 +1075,28 @@ class Btc15RedeemEngine:
                 float(WD_PROFILE["target_guarantee_ratio"]),
                 TP_PRICE,
             )
-        elif self._strategy_mode_volume_scalp():
+        elif self._strategy_mode_volume_t10():
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | UP+DOWN | max entry $%.2f/side | elapsed=%ds-%ds | vol_ratio>%.2f | "
-                "shares=%d | tp=avg+%.2f (cap0.99) | one primary/side; next only after scalp_tp fills on that side",
+                "[STRATEGY PARAMS] %s | profile=%s | volume_first=%ds-%ds ratio>%.2f | "
+                "volume_side=BTC_direction | t10_window=T-%ds..T-%ds | hybrid_exec=maker>=10s,maker>=5s,taker<5s | "
+                "tp_last_minute=$%.2f | min_btc_delta=%.4f | pair_sum<=%.2f | max_pos_pct=%.2f | min_shares=%d",
+                contract.slug,
+                self._profile_label(),
+                int(VOLUME_ENTRY_MIN_ELAPSED_SECONDS),
+                int(VOLUME_ENTRY_MAX_ELAPSED_SECONDS),
+                VOLUME_RATIO_THRESHOLD,
+                int(T10_ENTRY_START_SECONDS_REMAINING),
+                int(T10_ENTRY_END_SECONDS_REMAINING),
+                TP_PRICE,
+                T10_MIN_BTC_DELTA,
+                T10_PAIR_SUM_TARGET,
+                POSITION_MAX_PCT,
+                POLY_MIN_LIMIT_SHARES,
+            )
+        elif self._strategy_mode_volume_scalp_up():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | UP+DOWN | max entry $%.2f | elapsed=%ds-%ds | vol_ratio>%.2f | "
+                "shares=%d | max_orders/side=%d | tp=avg+%.2f | stop=avg-%.2f | time_exit<=%.0fs",
                 contract.slug,
                 self._profile_label(),
                 VOLUME_SCALP_ENTRY_MAX_PRICE,
@@ -1094,6 +1105,9 @@ class Btc15RedeemEngine:
                 self.config.volume_scalp_volume_ratio,
                 self.config.volume_scalp_shares,
                 self.config.volume_scalp_tp_offset,
+                self.config.volume_scalp_max_orders_per_side,
+                self.config.volume_scalp_stop_offset,
+                self.config.volume_scalp_time_exit_seconds_remaining,
             )
         elif self._strategy_mode_btc_perp15():
             LOGGER.info(
@@ -1109,24 +1123,6 @@ class Btc15RedeemEngine:
                 self.config.btc_perp15_min_shares,
                 self.config.btc_perp15_tp_price,
                 self.config.btc_perp15_end_dump_seconds_remaining,
-            )
-        elif self._strategy_mode_volume_t10():
-            LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | volume_first=%ds-%ds ratio>%.2f | "
-                "volume_side=BTC_direction | t10_window=T-%ds..T-%ds | hybrid_exec=maker>=10s,maker>=5s,taker<5s | "
-                "tp_last_minute=$%.2f | min_btc_delta=%.4f | pair_sum<=%.2f | fixed_shares=%d | min_shares=%d | up_only=true",
-                contract.slug,
-                self._profile_label(),
-                int(VOLUME_ENTRY_MIN_ELAPSED_SECONDS),
-                int(VOLUME_ENTRY_MAX_ELAPSED_SECONDS),
-                VOLUME_RATIO_THRESHOLD,
-                int(T10_ENTRY_START_SECONDS_REMAINING),
-                int(T10_ENTRY_END_SECONDS_REMAINING),
-                TP_PRICE,
-                T10_MIN_BTC_DELTA,
-                T10_PAIR_SUM_TARGET,
-                VOLUME_T10_FIXED_SHARES,
-                POLY_MIN_LIMIT_SHARES,
             )
         else:
             LOGGER.info(
@@ -1360,11 +1356,11 @@ class Btc15RedeemEngine:
         elif order.reason.startswith("aa1_balance|"):
             self._aa1_mark_balance_fill(order.reason)
         elif (
-            self._strategy_mode_volume_scalp()
+            self._strategy_mode_volume_scalp_up()
             and order.side_label in ("UP", "DOWN")
             and order.reason.startswith("volume_scalp|")
         ):
-            self._volume_scalp_cycle_armed[order.side_label] = True
+            self._volume_scalp_entry_count[order.side_label] = self._volume_scalp_entry_count.get(order.side_label, 0) + 1
             self._fully_exited_sides.discard(order.side_label)
             # notional is price×shares (cap), NOT true fill — use last side quote vs limit for anchor.
             lim = float(order.price)
@@ -1412,7 +1408,7 @@ class Btc15RedeemEngine:
             LOGGER.info("[CANCEL] %s | order=%s | reason=%s", contract.slug, order_id[:16], reason)
 
     def _run_take_profit_phase(self, contract: ActiveContract) -> None:
-        if self._strategy_mode_volume_scalp() or self._strategy_mode_btc_perp15():
+        if self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
             return
         raw = (self.config.strategy_mode or "").lower()
         if "scalp" in raw and "volume" in raw and "t10" not in raw:
@@ -1678,7 +1674,7 @@ class Btc15RedeemEngine:
             LOGGER.info("[EARLY EXIT] %s | winner_side=%s", contract.slug, winner_side)
 
     def _manage_exit_orders(self, contract: ActiveContract, open_orders: list[dict[str, Any]]) -> None:
-        if not self._tp_phase_started and not self._strategy_mode_volume_scalp() and not self._strategy_mode_btc_perp15():
+        if not self._tp_phase_started and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15():
             return
 
         open_ids = self._extract_live_ids(open_orders)
@@ -1692,7 +1688,7 @@ class Btc15RedeemEngine:
         if self._exit_mode_winner_side is not None:
             ws = self._exit_mode_winner_side
             # volume_scalp manages exits via purpose=scalp_tp only; generic winner TP at $0.99 must not run here.
-            if not self._strategy_mode_volume_scalp():
+            if not self._strategy_mode_volume_scalp_up():
                 self._ensure_exit_sell(
                     contract,
                     ws,
@@ -1700,13 +1696,13 @@ class Btc15RedeemEngine:
                     purpose="tp",
                 )
             loser_side = "DOWN" if ws == "UP" else "UP"
-            if ws in self._fully_exited_sides and not self._strategy_mode_volume_scalp():
+            if ws in self._fully_exited_sides and not self._strategy_mode_volume_scalp_up():
                 salvage_price = self._desired_exit_price(contract, loser_side, "salvage")
                 self._ensure_exit_sell(contract, loser_side, salvage_price, purpose="salvage")
         self._force_late_exit_cleanup(contract)
 
     def _cleanup_small_leftovers(self, contract: ActiveContract, seconds_remaining: float, now: float) -> None:
-        if self._strategy_mode_volume_scalp() or self._strategy_mode_btc_perp15():
+        if self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
             return
         if seconds_remaining > LEFTOVER_CLEANUP_START_SECONDS_REMAINING:
             return
@@ -1845,24 +1841,6 @@ class Btc15RedeemEngine:
             balance = self.trader.token_balance(token.token_id)
             if balance < 1:
                 self._fully_exited_sides.add(side_label)
-                if self._strategy_mode_volume_scalp() and side_label in ("UP", "DOWN"):
-                    if managed.purpose == "scalp_tp":
-                        self._volume_scalp_eligible_next[side_label] = True
-                        self._fully_exited_sides.discard(side_label)
-                        LOGGER.info(
-                            "[SCALP] %s | %s profit TP filled | next scalp entry allowed on this side",
-                            contract.slug,
-                            side_label,
-                        )
-                    elif self._volume_scalp_cycle_armed[side_label]:
-                        self._volume_scalp_eligible_next[side_label] = False
-                        self._fully_exited_sides.discard(side_label)
-                        LOGGER.warning(
-                            "[SCALP] %s | %s flat without scalp_tp fill | no further entries on this side this window",
-                            contract.slug,
-                            side_label,
-                        )
-                    self._volume_scalp_cycle_armed[side_label] = False
                 LOGGER.info(
                     "[EXIT FILLED] %s | side=%s | purpose=%s | price=$%.2f | remaining=%.4f",
                     contract.slug,
@@ -1949,7 +1927,7 @@ class Btc15RedeemEngine:
             )
 
     def _force_late_exit_cleanup(self, contract: ActiveContract) -> None:
-        if self._strategy_mode_volume_scalp() or self._strategy_mode_btc_perp15():
+        if self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
             return
         seconds_remaining = max(0.0, contract.end_time.timestamp() - time.time())
         if seconds_remaining > self.config.force_exit_before_end_seconds:
@@ -1999,20 +1977,20 @@ class Btc15RedeemEngine:
     def _ensure_exit_sell(self, contract: ActiveContract, side_label: str, price: float, purpose: str) -> None:
         if side_label in self._fully_exited_sides:
             return
-        if self._strategy_mode_volume_scalp() and purpose == "tp":
+        if self._strategy_mode_volume_scalp_up() and purpose == "tp":
             LOGGER.warning(
                 "[EXIT SKIP] %s | volume_scalp forbids generic tp (use scalp_tp only)",
                 contract.slug,
             )
             return
-        if self._strategy_mode_volume_scalp() and purpose == "salvage":
+        if self._strategy_mode_volume_scalp_up() and purpose == "salvage":
             LOGGER.info(
                 "[EXIT SKIP] %s | volume_scalp forbids hedge salvage on %s (use scalp_tp only)",
                 contract.slug,
                 side_label,
             )
             return
-        if purpose == "scalp_tp" and self._strategy_mode_volume_scalp():
+        if purpose == "scalp_tp" and self._strategy_mode_volume_scalp_up():
             limit_tp = self._volume_scalp_tp_from_buy_limit(side_label)
             if limit_tp is not None:
                 if abs(limit_tp - price) > 0.005:
@@ -2063,7 +2041,7 @@ class Btc15RedeemEngine:
         price: float,
         purpose: str,
     ) -> str | None:
-        if self._strategy_mode_volume_scalp() and purpose == "tp":
+        if self._strategy_mode_volume_scalp_up() and purpose == "tp":
             LOGGER.warning(
                 "[EXIT BLOCK] %s | refuse generic tp limit sell in volume_scalp (would be $%.2f)",
                 contract.slug,
@@ -2432,10 +2410,60 @@ class Btc15RedeemEngine:
         return current / avg_prev
 
     def _volume_t10_target_shares(self, entry_price: float) -> int:
-        _ = entry_price
-        return VOLUME_T10_FIXED_SHARES
+        safe_price = max(0.01, entry_price)
+        position_notional = self._window_budget_usdc * POSITION_MAX_PCT
+        target = int(position_notional / safe_price)
+        return max(POLY_MIN_LIMIT_SHARES, target)
+
+    def _wd_early_features(self) -> dict[str, float]:
+        price_rows_180 = self._s0_elapsed_price_rows(WD_DECISION_DELAY_SECONDS)
+        early_flips_180 = 0
+        prev_dom: str | None = None
+        early_lead_max = 0.0
+        for point in price_rows_180:
+            dom = "UP" if point.up_price >= point.down_price else "DOWN"
+            if prev_dom is not None and dom != prev_dom:
+                early_flips_180 += 1
+            prev_dom = dom
+            early_lead_max = max(early_lead_max, abs(point.up_price - point.down_price))
+        return {
+            "early_flips_180": float(early_flips_180),
+            "early_lead_max": float(early_lead_max),
+        }
+
+    def _wd_choose_action(self, elapsed: float) -> str | None:
+        if self._wd_window_action is not None:
+            return self._wd_window_action
+        if elapsed < WD_DECISION_DELAY_SECONDS:
+            return None
+
+        features = self._wd_early_features()
+        early_flips_180 = int(features["early_flips_180"])
+        early_lead_max = float(features["early_lead_max"])
+        action = (
+            "trade"
+            if early_flips_180 <= WD_FILTER_MAX_EARLY_FLIPS_180
+            and early_lead_max <= WD_FILTER_MAX_EARLY_LEAD_MAX_180
+            else "skip"
+        )
+        self._wd_window_action = action
+        LOGGER.info(
+            "[WD FILTER] %s | action=%s | early_flips_180=%d | early_lead_max=%.4f",
+            self._current_window_slug,
+            action,
+            early_flips_180,
+            early_lead_max,
+        )
+        return self._wd_window_action
+
+    def _wd_profile_value(self, key: str) -> float:
+        value = WD_PROFILE.get(key)
+        if value is None:
+            raise KeyError(f"Missing WD profile key: {key}")
+        return float(value)
 
     def _volume_t10_serial_scalp_blocks_entry(self, contract: ActiveContract) -> str | None:
+        """Block a new entry until TP/settlement cleared wallet vs window baseline and no buy is in flight."""
         up_d = self._token_delta(contract.up, self._baseline_up_balance)
         down_d = self._token_delta(contract.down, self._baseline_down_balance)
         if max(abs(up_d), abs(down_d)) > VOLUME_T10_SERIAL_INVENTORY_EPS:
@@ -2445,13 +2473,15 @@ class Btc15RedeemEngine:
         return None
 
     def _volume_scalp_blocks_new_entry(self, contract: ActiveContract, side_label: str) -> str | None:
-        """At most one primary lot per side: block if that side still holds tokens or has an open primary buy."""
-        token = contract.up if side_label == "UP" else contract.down
-        baseline = self._baseline_up_balance if side_label == "UP" else self._baseline_down_balance
-        d = self._token_delta(token, baseline)
-        if d > VOLUME_T10_SERIAL_INVENTORY_EPS:
-            return f"{side_label}: still holding inventory (Δ={d:.3f})"
-        if any(o.kind == "primary" and o.side_label == side_label for o in self._order_map.values()):
+        """Allow repeat scalp entries up to a side cap; only block duplicate live buys or cap exhaustion."""
+        if self._volume_scalp_entry_count.get(side_label, 0) >= int(self.config.volume_scalp_max_orders_per_side):
+            return f"{side_label}: max scalp entries reached"
+        if any(
+            o.kind == "primary"
+            and o.side_label == side_label
+            and o.reason.startswith("volume_scalp|")
+            for o in self._order_map.values()
+        ):
             return f"{side_label}: primary entry order still open"
         return None
 
@@ -2476,15 +2506,15 @@ class Btc15RedeemEngine:
         Do not combine with min() against live mkt: a transient low quote would drag
         anchor+offset below true entry (e.g. buy ~0.54, TP wrongly ~0.51 instead of ~0.66).
         """
-        stored = self._volume_scalp_entry_reference_px.get(side_label)
-        if stored is not None and 0 < float(stored) < 1:
-            return float(stored)
         shares = self._up_shares if side_label == "UP" else self._down_shares
         spend = self._up_spend if side_label == "UP" else self._down_spend
         if shares >= 1 and spend > 0:
             avg = spend / float(shares)
             if 0 < avg < 1:
                 return float(avg)
+        stored = self._volume_scalp_entry_reference_px.get(side_label)
+        if stored is not None and 0 < float(stored) < 1:
+            return float(stored)
         mkt = self._side_price(side_label)
         if mkt > 0 and mkt < 1:
             return float(mkt)
@@ -2492,7 +2522,7 @@ class Btc15RedeemEngine:
 
     def _volume_scalp_tp_from_buy_limit(self, side_label: str) -> float | None:
         """TP = effective entry anchor + offset (anchor from hint, then ledger, then mkt)."""
-        if not self._strategy_mode_volume_scalp():
+        if not self._strategy_mode_volume_scalp_up():
             return None
         anchor = self._volume_scalp_effective_entry_anchor(side_label)
         if anchor is None or not (0 < anchor < 1):
@@ -2501,10 +2531,86 @@ class Btc15RedeemEngine:
         return round(min(0.99, anchor + off), 2)
 
     def _maybe_volume_scalp_arm_take_profit(self, contract: ActiveContract) -> None:
-        if not self._strategy_mode_volume_scalp():
+        if not self._strategy_mode_volume_scalp_up():
             return
         for side_label in ("UP", "DOWN"):
             self._volume_scalp_arm_take_profit_for_side(contract, side_label)
+
+    def _maybe_volume_scalp_risk_exit(self, contract: ActiveContract, seconds_remaining: float) -> None:
+        if not self._strategy_mode_volume_scalp_up():
+            return
+        for side_label, token in (("UP", contract.up), ("DOWN", contract.down)):
+            baseline = self._baseline_up_balance if side_label == "UP" else self._baseline_down_balance
+            position_shares = float(self._token_delta(token, baseline))
+            if position_shares <= VOLUME_T10_SERIAL_INVENTORY_EPS:
+                continue
+            anchor = self._volume_scalp_effective_entry_anchor(side_label)
+            current_price = self._side_price(side_label)
+            if anchor is None or current_price <= 0:
+                continue
+            stop_price = round(max(0.01, anchor - float(self.config.volume_scalp_stop_offset)), 2)
+            stop_hit = current_price <= stop_price
+            time_exit = seconds_remaining <= float(self.config.volume_scalp_time_exit_seconds_remaining)
+            if not stop_hit and not time_exit:
+                continue
+
+            active = self._exit_orders_by_side.get(side_label)
+            if active is not None:
+                oid = active.order_id
+                if oid in self._order_map:
+                    self._cancel_order_safe(oid, reason="volume-scalp-risk-exit")
+                else:
+                    self._cancel_venue_order(oid, reason="volume-scalp-risk-exit")
+                self._exit_orders_by_side.pop(side_label, None)
+                self._fully_exited_sides.discard(side_label)
+
+            free_wallet = float(self.trader.token_balance(token.token_id))
+            sell_qty = min(max(0.0, free_wallet), position_shares)
+            if sell_qty <= 0.0:
+                continue
+            sell_limit = self._sub_two_marketable_sell_limit_price(token, side_label)
+            reason = "stop" if stop_hit else "time_exit"
+            if self.config.dry_run:
+                LOGGER.info(
+                    "[DRY SCALP %s] %s | side=%s | current=$%.2f | anchor=$%.4f | stop=$%.2f | sell=%.4f | limit=$%.2f",
+                    reason.upper(),
+                    contract.slug,
+                    side_label,
+                    current_price,
+                    anchor,
+                    stop_price,
+                    sell_qty,
+                    sell_limit,
+                )
+                continue
+            try:
+                resp = self.trader.place_marketable_sell(token, sell_limit, round(sell_qty, 4))
+                order_id = str(resp.get("orderID") or resp.get("id") or "")
+                LOGGER.info(
+                    "[SCALP %s] %s | side=%s | current=$%.2f | anchor=$%.4f | stop=$%.2f | sell=%.4f | limit=$%.2f | order=%s",
+                    reason.upper(),
+                    contract.slug,
+                    side_label,
+                    current_price,
+                    anchor,
+                    stop_price,
+                    sell_qty,
+                    sell_limit,
+                    order_id[:16] if order_id else "n/a",
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "[SCALP %s FAILED] %s | side=%s | current=$%.2f | anchor=$%.4f | stop=$%.2f | sell=%.4f | limit=$%.2f | %s",
+                    reason.upper(),
+                    contract.slug,
+                    side_label,
+                    current_price,
+                    anchor,
+                    stop_price,
+                    sell_qty,
+                    sell_limit,
+                    exc,
+                )
 
     def _volume_scalp_arm_take_profit_for_side(self, contract: ActiveContract, side_label: str) -> None:
         token = contract.up if side_label == "UP" else contract.down
@@ -2576,11 +2682,6 @@ class Btc15RedeemEngine:
         if block is not None:
             self._no_signal_reason = block
             return None
-        if not self._volume_scalp_eligible_next.get(side_label, True):
-            self._no_signal_reason = (
-                f"{side_label}: prior scalp closed without profit TP — idle on this side until next window"
-            )
-            return None
         emin = float(self.config.volume_scalp_entry_min_elapsed)
         emax = float(min(self.config.volume_scalp_entry_max_elapsed, self.config.window_size_seconds - 30))
         if not (emin <= elapsed <= emax):
@@ -2633,62 +2734,17 @@ class Btc15RedeemEngine:
             execution_style="taker_best_ask",
         )
 
-    def _wd_early_features(self) -> dict[str, float]:
-        price_rows_180 = self._s0_elapsed_price_rows(WD_DECISION_DELAY_SECONDS)
-        early_flips_180 = 0
-        prev_dom: str | None = None
-        early_lead_max = 0.0
-        for point in price_rows_180:
-            dom = "UP" if point.up_price >= point.down_price else "DOWN"
-            if prev_dom is not None and dom != prev_dom:
-                early_flips_180 += 1
-            prev_dom = dom
-            early_lead_max = max(early_lead_max, abs(point.up_price - point.down_price))
-        return {
-            "early_flips_180": float(early_flips_180),
-            "early_lead_max": float(early_lead_max),
-        }
-
-    def _wd_choose_action(self, elapsed: float) -> str | None:
-        if self._wd_window_action is not None:
-            return self._wd_window_action
-        if elapsed < WD_DECISION_DELAY_SECONDS:
-            return None
-
-        features = self._wd_early_features()
-        early_flips_180 = int(features["early_flips_180"])
-        early_lead_max = float(features["early_lead_max"])
-        action = (
-            "trade"
-            if early_flips_180 <= WD_FILTER_MAX_EARLY_FLIPS_180
-            and early_lead_max <= WD_FILTER_MAX_EARLY_LEAD_MAX_180
-            else "skip"
-        )
-        self._wd_window_action = action
-        LOGGER.info(
-            "[WD FILTER] %s | action=%s | early_flips_180=%d | early_lead_max=%.4f",
-            self._current_window_slug,
-            action,
-            early_flips_180,
-            early_lead_max,
-        )
-        return self._wd_window_action
-
-    def _wd_profile_value(self, key: str) -> float:
-        value = WD_PROFILE.get(key)
-        if value is None:
-            raise KeyError(f"Missing WD profile key: {key}")
-        return float(value)
-
     def _choose_volume_t10_candidate(
         self,
+        contract: ActiveContract,
         snapshot: BookSnapshot,
         elapsed: float,
         seconds_remaining: float,
     ) -> OrderCandidate | None:
         self._no_signal_reason = ""
-        if self._volume_t10_trade_taken:
-            self._no_signal_reason = f"{self._volume_t10_trade_tag or 'window'} trade already taken"
+        block = self._volume_t10_serial_scalp_blocks_entry(contract)
+        if block is not None:
+            self._no_signal_reason = f"serial scalp: {block}"
             return None
         if snapshot.primary_price <= 0 or snapshot.hedge_price <= 0:
             self._no_signal_reason = "waiting for both side prices"
@@ -2704,10 +2760,10 @@ class Btc15RedeemEngine:
                 self._no_signal_reason = "waiting for 30s BTC volume baseline"
                 return None
             if volume_ratio > VOLUME_RATIO_THRESHOLD:
-                if btc_return <= 0:
-                    self._no_signal_reason = "volume spike but BTC direction is not UP"
+                if btc_return == 0:
+                    self._no_signal_reason = "volume spike but BTC direction is flat"
                     return None
-                side_label = "UP"
+                side_label = "UP" if btc_return > 0 else "DOWN"
                 side_price = self._side_price(side_label)
                 if not (VOLUME_ENTRY_MIN_PRICE < side_price <= VOLUME_ENTRY_MAX_PRICE):
                     self._no_signal_reason = f"volume {side_label} price outside entry band"
@@ -2730,11 +2786,11 @@ class Btc15RedeemEngine:
         if not (T10_ENTRY_END_SECONDS_REMAINING <= seconds_remaining <= T10_ENTRY_START_SECONDS_REMAINING):
             self._no_signal_reason = "outside T10 entry window"
             return None
-        if btc_return < T10_MIN_BTC_DELTA:
-            self._no_signal_reason = "btc delta below UP-only T10 minimum"
+        if abs(btc_return) < T10_MIN_BTC_DELTA:
+            self._no_signal_reason = "btc delta below T10 minimum"
             return None
 
-        side_label = "UP"
+        side_label = "UP" if btc_return > 0 else "DOWN"
         entry_price = self._side_price(side_label)
         pair_sum = self._side_price("UP") + self._side_price("DOWN")
         if pair_sum > T10_PAIR_SUM_TARGET:
@@ -3702,11 +3758,8 @@ class Btc15RedeemEngine:
                 reason=candidate.reason,
             )
             self._record_order_metrics(candidate.kind)
-            if candidate.strategy_tag and self._strategy_mode_volume_t10():
-                self._volume_t10_trade_taken = True
-                self._volume_t10_trade_tag = candidate.strategy_tag
             sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
-            if sl is not None and self._strategy_mode_volume_scalp():
+            if sl is not None and self._strategy_mode_volume_scalp_up():
                 px_parts = [float(limit_price), float(candidate.reference_price)]
                 mx = self._side_price(candidate.side_label)
                 if mx > 0 and mx < 1:
@@ -3815,11 +3868,8 @@ class Btc15RedeemEngine:
             reason=candidate.reason,
         )
         self._record_order_metrics(candidate.kind)
-        if candidate.strategy_tag and self._strategy_mode_volume_t10():
-            self._volume_t10_trade_taken = True
-            self._volume_t10_trade_tag = candidate.strategy_tag
         sl = self._volume_scalp_strategy_side(candidate.strategy_tag)
-        if sl is not None and self._strategy_mode_volume_scalp():
+        if sl is not None and self._strategy_mode_volume_scalp_up():
             px_parts = [float(limit_price), float(candidate.reference_price)]
             mx = self._side_price(candidate.side_label)
             if mx > 0 and mx < 1:
@@ -3913,7 +3963,7 @@ class Btc15RedeemEngine:
         ), "maker"
 
     def _phase_cap_usdc(self, elapsed: float) -> float:
-        if self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp() or self._strategy_mode_btc_perp15():
+        if self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
             return self._window_budget_usdc
         for upper_bound, share in PHASE_SPEND_CAPS:
             if elapsed <= upper_bound:

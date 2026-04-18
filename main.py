@@ -29,15 +29,15 @@ def main() -> int:
     LOGGER.info("strategy_mode= %s", config.strategy_mode)
     if config.strategy_mode == "wd":
         LOGGER.info("strategy_id  = %s", "WD_wallet_strict_v1")
-    elif config.strategy_mode == "volume_scalp_up":
-        LOGGER.info("strategy_id  = %s", "BTC_VOLUME_SCALP_UP_v1")
-    elif config.strategy_mode == "btc_perp15":
-        LOGGER.info("strategy_id  = %s", "BTC_PERP15_UP_LADDER_v3")
     elif config.strategy_mode in {"volume_t10", "volume_t10_hybrid"}:
         LOGGER.info(
             "strategy_id  = %s",
             "BTC_VOLUME_T10_hybrid_v2" if config.strategy_mode == "volume_t10_hybrid" else "BTC_VOLUME_T10_dual_v1",
         )
+    elif config.strategy_mode == "volume_scalp_up":
+        LOGGER.info("strategy_id  = %s", "BTC_VOLUME_SCALP_UP_v2")
+    elif config.strategy_mode == "btc_perp15":
+        LOGGER.info("strategy_id  = %s", "BTC_PERP15_UP_LADDER_v3")
     elif config.strategy_mode == "signal_only":
         LOGGER.info("signal_preset= %s", config.signal_preset)
     LOGGER.info("market       = %s", config.market_slug_prefix)

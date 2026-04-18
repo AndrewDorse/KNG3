@@ -32,7 +32,7 @@ class BotConfigError(RuntimeError):
 
 def _normalize_strategy_mode(raw: str | None) -> str:
     """Canonicalize strategy_mode so volume-scalp variants always match engine guards (avoids late $0.99 TP)."""
-    s = (raw or "btc_perp15").strip().lower()
+    s = (raw or "wd").strip().lower()
     for ch in ("\r", "\n", "\t"):
         s = s.replace(ch, "")
     s = s.replace("-", "_")
@@ -100,13 +100,15 @@ class BotConfig:
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
     # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
-    strategy_mode: str = "btc_perp15"
-    # volume_scalp_up: TP = min(stored hint, last side px, ledger avg) + offset — ManagedOrder.notional is not fill outlay.
-    # next entry on that side only after its scalp_tp fills. Entry price must be <= $0.80 (see engine constant).
+    strategy_mode: str = "volume_scalp_up"
+    # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
+    volume_scalp_stop_offset: float = 0.05
     volume_scalp_shares: int = 6
+    volume_scalp_max_orders_per_side: int = 3
     volume_scalp_entry_min_elapsed: int = 60
     volume_scalp_entry_max_elapsed: int = 840
+    volume_scalp_time_exit_seconds_remaining: int = 60
     volume_scalp_volume_ratio: float = 2.5
     # BTC 15m perp ladder: UP-only, early BTC trend gate, passive entry ladder.
     btc_perp15_monitor_seconds: int = 120
@@ -117,6 +119,7 @@ class BotConfig:
     btc_perp15_risk_pct: float = 0.10
     btc_perp15_tp_price: float = 0.99
     btc_perp15_sample_interval_seconds: float = 5.0
+    # When T-remaining <= this, flatten any positive window position with a marketable sell (btc_perp15 only).
     btc_perp15_end_dump_seconds_remaining: float = 15.0
 
     @property
@@ -216,11 +219,14 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "btc_perp15")),
+            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up")),
             volume_scalp_tp_offset=volume_scalp_tp_raw,
+            volume_scalp_stop_offset=_env_float("BOT_VOLUME_SCALP_STOP_OFFSET", 0.05),
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),
+            volume_scalp_max_orders_per_side=max(1, _env_int("BOT_VOLUME_SCALP_MAX_ORDERS_PER_SIDE", 3)),
             volume_scalp_entry_min_elapsed=max(0, _env_int("BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED", 60)),
             volume_scalp_entry_max_elapsed=max(1, _env_int("BOT_VOLUME_SCALP_ENTRY_MAX_ELAPSED", 840)),
+            volume_scalp_time_exit_seconds_remaining=max(1, _env_int("BOT_VOLUME_SCALP_TIME_EXIT_SECONDS_REMAINING", 60)),
             volume_scalp_volume_ratio=_env_float("BOT_VOLUME_SCALP_VOLUME_RATIO", 2.5),
             btc_perp15_monitor_seconds=max(30, _env_int("BOT_PERP15_MONITOR_SECONDS", 120)),
             btc_perp15_btc_trend_threshold=_env_float("BOT_PERP15_BTC_TREND_THRESHOLD", 0.0005),
