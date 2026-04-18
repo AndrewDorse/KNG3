@@ -85,14 +85,14 @@ Recommended:
 
 The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
 
-- Monitor the first `240s` of the window and sample BTC every `5s`.
-- Trade `UP` only, and only when BTC trend is at least `+0.05%` over the monitor window.
-- No cheaper-side fallback and no `DOWN` trades.
-- Only enter when `UP` is in the entry band `0.05` to `0.80`.
-- Place a `0.98` TP limit after entry.
+- Trade `UP` only.
+- Gate on BTC trend over the first `120s`; require at least `+0.05%`.
+- Place three passive `UP` buy orders for `6` shares each at `0.44`, `0.43`, and `0.40`.
+- Keep entry orders live only until `420s`, then cancel remaining buys.
+- After the buy window ends, place a `0.99` TP sell for the current filled `UP` position.
 - If TP is still open, force-dump in the final `15s` of the window.
 
-Optional env vars: `BOT_PERP15_ENTRY_MIN`, `BOT_PERP15_ENTRY_MAX`, `BOT_PERP15_MONITOR_SECONDS`, `BOT_PERP15_SAMPLE_INTERVAL_SECONDS`, `BOT_PERP15_BTC_TREND_THRESHOLD`, `BOT_PERP15_TP_PRICE`, `BOT_PERP15_END_DUMP_SECONDS_REMAINING`, `BOT_PERP15_MIN_SHARES`.
+Optional env vars: `BOT_PERP15_MONITOR_SECONDS`, `BOT_PERP15_SAMPLE_INTERVAL_SECONDS`, `BOT_PERP15_BTC_TREND_THRESHOLD`, `BOT_PERP15_ENTRY_WINDOW_SECONDS`, `BOT_PERP15_LADDER_PRICES`, `BOT_PERP15_TP_PRICE`, `BOT_PERP15_END_DUMP_SECONDS_REMAINING`, `BOT_PERP15_MIN_SHARES`.
 
 The live runtime uses the repo's poll-based BTC feed and CLOB access, not a streaming L2 WebSocket.
 

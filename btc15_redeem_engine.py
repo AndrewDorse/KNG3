@@ -36,7 +36,7 @@ WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
 VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
 VOLUME_SCALP_UP_STRATEGY_PROFILE_ID = "BTC_VOLUME_SCALP_UP_v1"
-BTC_PERP15_PROFILE_ID = "BTC_PERP15_UP_ONLY_v2"
+BTC_PERP15_PROFILE_ID = "BTC_PERP15_UP_LADDER_v3"
 STRATEGY_PROFILE_ID = BTC_PERP15_PROFILE_ID
 
 
@@ -526,10 +526,14 @@ class Btc15RedeemEngine:
         self._perp15_samples: list[tuple[float, float, float]] = []
         self._perp15_last_sample_ts: float = 0.0
         self._perp15_monitor_complete: bool = False
+        self._perp15_gate_passed: bool = False
         self._perp15_entry_placed: bool = False
         self._perp15_chosen_side: str | None = None
         self._perp15_entry_px: float | None = None
         self._perp15_target_shares: int = 0
+        self._perp15_ladder_submitted: bool = False
+        self._perp15_entry_window_closed: bool = False
+        self._perp15_attempted_entry_prices: set[float] = set()
         self._perp15_last_end_dump_ts: dict[str, float] = {"UP": 0.0, "DOWN": 0.0}
 
         self._order_map: dict[str, ManagedOrder] = {}
@@ -934,10 +938,14 @@ class Btc15RedeemEngine:
         self._perp15_samples = []
         self._perp15_last_sample_ts = 0.0
         self._perp15_monitor_complete = False
+        self._perp15_gate_passed = False
         self._perp15_entry_placed = False
         self._perp15_chosen_side = None
         self._perp15_entry_px = None
         self._perp15_target_shares = 0
+        self._perp15_ladder_submitted = False
+        self._perp15_entry_window_closed = False
+        self._perp15_attempted_entry_prices = set()
         self._perp15_last_end_dump_ts = {"UP": 0.0, "DOWN": 0.0}
 
         self._baseline_up_balance = self.trader.token_balance(contract.up.token_id)
@@ -1089,17 +1097,15 @@ class Btc15RedeemEngine:
             )
         elif self._strategy_mode_btc_perp15():
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | monitor=%ds sample=%.1fs | up_only btc_trend>=%.4f | entry [%.2f,%.2f] | "
-                "risk=%.0f%% min_sh=%d | TP=$%.2f | T<=%.0fs remaining → market flatten positive position | "
-                "one entry+TP until then; else settlement",
+                "[STRATEGY PARAMS] %s | profile=%s | gate=%ds sample=%.1fs btc_trend>=%.4f | up_only ladder=%s | "
+                "entry_window<=%ds | shares/order=%d | TP-after-cutoff=$%.2f | dump<=%.0fs",
                 contract.slug,
                 self._profile_label(),
                 self.config.btc_perp15_monitor_seconds,
                 self.config.btc_perp15_sample_interval_seconds,
                 self.config.btc_perp15_btc_trend_threshold,
-                self.config.btc_perp15_entry_min,
-                self.config.btc_perp15_entry_max,
-                self.config.btc_perp15_risk_pct * 100.0,
+                ",".join(f"{p:.2f}" for p in self.config.btc_perp15_ladder_prices),
+                self.config.btc_perp15_entry_window_seconds,
                 self.config.btc_perp15_min_shares,
                 self.config.btc_perp15_tp_price,
                 self.config.btc_perp15_end_dump_seconds_remaining,
@@ -1422,23 +1428,16 @@ class Btc15RedeemEngine:
         return
 
     def _btc_perp15_compute_shares(self, balance: float, entry: float) -> int | None:
-        """Spec: 10% notional, max(5, int(shares)), cap by balance/entry; also satisfy venue min notional."""
+        """Fixed-lot ladder sizing for btc_perp15."""
         c = self.config
         if entry <= 0 or balance <= 0:
             return None
         if balance < entry * float(c.btc_perp15_min_shares):
             return None
-        if entry < c.btc_perp15_entry_min or entry > c.btc_perp15_entry_max:
-            return None
-        dollar = balance * float(c.btc_perp15_risk_pct)
-        raw_sh = dollar / entry
-        min_notional_sh = int(math.ceil(MIN_MARKETABLE_BUY_NOTIONAL / entry))
-        shares = max(int(c.btc_perp15_min_shares), int(raw_sh), min_notional_sh)
-        max_sh = int(balance / entry)
-        if max_sh < int(c.btc_perp15_min_shares):
-            return None
-        shares = min(shares, max_sh)
+        shares = int(c.btc_perp15_min_shares)
         if shares < 1:
+            return None
+        if balance < entry * shares:
             return None
         return shares
 
@@ -1449,11 +1448,12 @@ class Btc15RedeemEngine:
         elapsed: float,
         seconds_remaining: float,
     ) -> None:
-        """Monitor UP/DOWN/BTC every sample_interval; after monitor window, enter once then rely on TP + settlement."""
+        """Gate on early BTC trend, place fixed UP ladder orders, then convert filled inventory to TP after cutoff."""
         now = time.time()
-        mon = float(self.config.btc_perp15_monitor_seconds)
+        gate_seconds = float(self.config.btc_perp15_monitor_seconds)
+        entry_window_seconds = float(self.config.btc_perp15_entry_window_seconds)
 
-        if elapsed < mon:
+        if elapsed < gate_seconds:
             if (
                 self._last_up_price is not None
                 and self._last_down_price is not None
@@ -1472,116 +1472,94 @@ class Btc15RedeemEngine:
                     self._perp15_last_sample_ts = now
             return
 
-        if self._perp15_monitor_complete:
-            return
-        self._perp15_monitor_complete = True
-
-        if not self._perp15_samples:
-            LOGGER.warning("[PERP15] %s | no samples in monitor phase; skip window", contract.slug)
-            return
-
-        min_up = min(p[0] for p in self._perp15_samples)
-        b0 = float(self._perp15_samples[0][2])
-        b1 = float(self._perp15_samples[-1][2])
-        if b0 > 0:
-            btc_trend = (b1 - b0) / b0
-        else:
-            btc_trend = 0.0
-
-        thr = float(self.config.btc_perp15_btc_trend_threshold)
-        if btc_trend < thr:
+        if not self._perp15_monitor_complete:
+            self._perp15_monitor_complete = True
+            if not self._perp15_samples:
+                LOGGER.warning("[PERP15] %s | no samples in gate phase; skip window", contract.slug)
+                return
+            b0 = float(self._perp15_samples[0][2])
+            b1 = float(self._perp15_samples[-1][2])
+            btc_trend = ((b1 - b0) / b0) if b0 > 0 else 0.0
+            thr = float(self.config.btc_perp15_btc_trend_threshold)
+            if btc_trend < thr:
+                LOGGER.info(
+                    "[PERP15] %s | skip no UP trend confirmation btc_trend=%+.5f (need >= %.5f)",
+                    contract.slug,
+                    btc_trend,
+                    thr,
+                )
+                return
+            self._perp15_gate_passed = True
+            self._perp15_chosen_side = "UP"
             LOGGER.info(
-                "[PERP15] %s | skip no UP trend confirmation btc_trend=%+.5f (need >= %.5f) | min_up=$%.4f",
+                "[PERP15] %s | gate passed btc_trend=%+.5f | ladder=%s",
                 contract.slug,
                 btc_trend,
-                thr,
-                min_up,
+                ",".join(f"{p:.2f}" for p in self.config.btc_perp15_ladder_prices),
             )
-            return
-        side = "UP"
-        entry = min_up
 
-        emin = float(self.config.btc_perp15_entry_min)
-        emax = float(self.config.btc_perp15_entry_max)
-        if entry < emin or entry > emax:
-            LOGGER.info(
-                "[PERP15] %s | skip entry out of range side=%s entry=$%.4f (need [%.2f,%.2f]) | min_up=$%.4f btc_trend=%+.5f",
-                contract.slug,
-                side,
-                entry,
-                emin,
-                emax,
-                min_up,
-                btc_trend,
-            )
+        if not self._perp15_gate_passed:
             return
 
-        balance = float(self._window_budget_usdc)
-        if balance < entry * int(self.config.btc_perp15_min_shares):
-            LOGGER.info(
-                "[PERP15] %s | skip insufficient budget $%.2f for min %d sh @ $%.4f",
-                contract.slug,
-                balance,
-                int(self.config.btc_perp15_min_shares),
-                entry,
-            )
+        if elapsed >= entry_window_seconds:
+            if not self._perp15_entry_window_closed:
+                self._perp15_entry_window_closed = True
+                cancelled = 0
+                for order_id, order in list(self._order_map.items()):
+                    if order.reason.startswith("btc_perp15|entry|side=UP"):
+                        self._cancel_order_safe(order_id, reason="perp15-entry-window-ended")
+                        cancelled += 1
+                LOGGER.info("[PERP15] %s | entry window ended | cancelled_up_buys=%d", contract.slug, cancelled)
+            self._perp15_entry_placed = True
             return
-
-        shares = self._btc_perp15_compute_shares(balance, entry)
-        if shares is None:
-            LOGGER.info("[PERP15] %s | skip position size / notional (budget=$%.2f entry=$%.4f)", contract.slug, balance, entry)
-            return
-
-        cost = entry * float(shares)
-        if balance < cost:
-            LOGGER.info("[PERP15] %s | skip cost $%.2f > budget $%.2f", contract.slug, cost, balance)
-            return
-
-        LOGGER.info(
-            "[PERP15] %s | DECISION side=%s entry=$%.4f sh=%d (~$%.2f) | min_up=$%.4f btc_trend=%+.5f samples=%d",
-            contract.slug,
-            side,
-            entry,
-            shares,
-            cost,
-            min_up,
-            btc_trend,
-            len(self._perp15_samples),
-        )
 
         if seconds_remaining <= float(self.config.strategy_new_order_cutoff_seconds):
             LOGGER.warning("[PERP15] %s | skip past new-order cutoff (remaining=%.0fs)", contract.slug, seconds_remaining)
             return
 
-        candidate = OrderCandidate(
-            side_label=side,
-            kind="primary",
-            reference_price=float(entry),
-            limit_ceiling=min(0.99, float(entry) + 0.08),
-            reason=f"btc_perp15|entry|side={side}",
-            shares=int(shares),
-            execution_style="taker_best_ask",
-        )
         open_orders = self._get_contract_orders(contract)
-        if not self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
-            LOGGER.warning("[PERP15] %s | cannot place entry: %s", contract.slug, self._no_signal_reason)
+        live_buy_prices = {
+            round(order.price, 2)
+            for order in self._order_map.values()
+            if order.reason.startswith("btc_perp15|entry|side=UP")
+        }
+        for entry in self.config.btc_perp15_ladder_prices:
+            px = round(float(entry), 2)
+            if px in self._perp15_attempted_entry_prices or px in live_buy_prices:
+                continue
+            shares = int(self.config.btc_perp15_min_shares)
+            cost = px * float(shares)
+            if self._window_budget_usdc < cost:
+                LOGGER.info("[PERP15] %s | skip ladder level $%.2f cost $%.2f > budget $%.2f", contract.slug, px, cost, self._window_budget_usdc)
+                self._perp15_attempted_entry_prices.add(px)
+                continue
+            candidate = OrderCandidate(
+                side_label="UP",
+                kind="primary",
+                reference_price=px,
+                limit_ceiling=px,
+                reason="btc_perp15|entry|side=UP",
+                shares=shares,
+                min_shares=shares,
+                execution_style="normal",
+            )
+            if not self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                LOGGER.warning("[PERP15] %s | cannot place ladder level $%.2f: %s", contract.slug, px, self._no_signal_reason)
+                return
+            if self._place_candidate(contract, candidate, snapshot, elapsed):
+                self._perp15_attempted_entry_prices.add(px)
+                self._perp15_ladder_submitted = True
+                self._perp15_entry_placed = True
             return
-        if not self._place_candidate(contract, candidate, snapshot, elapsed):
-            return
-
-        self._perp15_chosen_side = side
-        self._perp15_entry_px = float(entry)
-        self._perp15_target_shares = int(shares)
-        self._perp15_entry_placed = True
 
     def _btc_perp15_ensure_tp_limit(self, contract: ActiveContract) -> None:
-        if not self._perp15_entry_placed or self._perp15_chosen_side is None:
+        if not self._perp15_entry_window_closed or self._perp15_chosen_side is None:
             return
         sr = max(0.0, float(contract.end_time.timestamp()) - time.time())
         if sr <= float(self.config.btc_perp15_end_dump_seconds_remaining):
             return
         side = self._perp15_chosen_side
-        if any(o.side_label == side for o in self._order_map.values()):
+        if any(o.reason.startswith("btc_perp15|entry|side=UP") for o in self._order_map.values()):
             return
         token = contract.up if side == "UP" else contract.down
         bal = float(self.trader.token_balance(token.token_id))
@@ -3641,7 +3619,8 @@ class Btc15RedeemEngine:
             self._no_signal_reason = "live order cap reached"
             return False
 
-        if any(order.side_label == candidate.side_label for order in self._order_map.values()):
+        allow_same_side = self._strategy_mode_btc_perp15() and candidate.reason.startswith("btc_perp15|entry|side=UP")
+        if (not allow_same_side) and any(order.side_label == candidate.side_label for order in self._order_map.values()):
             self._no_signal_reason = f"pending {candidate.side_label} order already live"
             return False
 

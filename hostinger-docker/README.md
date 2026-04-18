@@ -78,11 +78,11 @@ Recommended:
 
 The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
 
-- Monitor the first `240s` of the window and sample BTC every `5s`
-- Trade `UP` only, and only when BTC trend is at least `+0.05%` over the monitor window
-- No cheaper-side fallback and no `DOWN` trades
-- Only enter when `UP` is between `0.05` and `0.80`
-- Rest a `0.98` TP limit after entry
+- Trade `UP` only
+- Gate on BTC trend over the first `120s`; require at least `+0.05%`
+- Place three passive `UP` buy orders for `6` shares each at `0.44`, `0.43`, and `0.40`
+- Keep entry orders live only until `420s`, then cancel remaining buys
+- After the buy window ends, rest a `0.99` TP limit for the filled `UP` position
 - If TP is still open, force-dump in the last `15s`
 
 Optional tuning lives in `.env.example` under `BOT_PERP15_*`.
