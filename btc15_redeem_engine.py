@@ -36,7 +36,7 @@ WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
 VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
 VOLUME_SCALP_UP_STRATEGY_PROFILE_ID = "BTC_VOLUME_SCALP_UP_v1"
-BTC_PERP15_PROFILE_ID = "BTC_PERP15_v1"
+BTC_PERP15_PROFILE_ID = "BTC_PERP15_UP_ONLY_v2"
 STRATEGY_PROFILE_ID = BTC_PERP15_PROFILE_ID
 
 
@@ -1089,7 +1089,7 @@ class Btc15RedeemEngine:
             )
         elif self._strategy_mode_btc_perp15():
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | monitor=%ds sample=%.1fs | abs(btc_trend)>=%.4f | entry [%.2f,%.2f] | "
+                "[STRATEGY PARAMS] %s | profile=%s | monitor=%ds sample=%.1fs | up_only btc_trend>=%.4f | entry [%.2f,%.2f] | "
                 "risk=%.0f%% min_sh=%d | TP=$%.2f | T<=%.0fs remaining → market flatten positive position | "
                 "one entry+TP until then; else settlement",
                 contract.slug,
@@ -1481,7 +1481,6 @@ class Btc15RedeemEngine:
             return
 
         min_up = min(p[0] for p in self._perp15_samples)
-        min_down = min(p[1] for p in self._perp15_samples)
         b0 = float(self._perp15_samples[0][2])
         b1 = float(self._perp15_samples[-1][2])
         if b0 > 0:
@@ -1490,24 +1489,29 @@ class Btc15RedeemEngine:
             btc_trend = 0.0
 
         thr = float(self.config.btc_perp15_btc_trend_threshold)
-        if abs(btc_trend) >= thr:
-            side = "UP" if btc_trend > 0 else "DOWN"
-        else:
-            side = "UP" if min_up <= min_down else "DOWN"
-        entry = min_up if side == "UP" else min_down
+        if btc_trend < thr:
+            LOGGER.info(
+                "[PERP15] %s | skip no UP trend confirmation btc_trend=%+.5f (need >= %.5f) | min_up=$%.4f",
+                contract.slug,
+                btc_trend,
+                thr,
+                min_up,
+            )
+            return
+        side = "UP"
+        entry = min_up
 
         emin = float(self.config.btc_perp15_entry_min)
         emax = float(self.config.btc_perp15_entry_max)
         if entry < emin or entry > emax:
             LOGGER.info(
-                "[PERP15] %s | skip entry out of range side=%s entry=$%.4f (need [%.2f,%.2f]) | min_up=$%.4f min_dn=$%.4f btc_trend=%+.5f",
+                "[PERP15] %s | skip entry out of range side=%s entry=$%.4f (need [%.2f,%.2f]) | min_up=$%.4f btc_trend=%+.5f",
                 contract.slug,
                 side,
                 entry,
                 emin,
                 emax,
                 min_up,
-                min_down,
                 btc_trend,
             )
             return
@@ -1534,14 +1538,13 @@ class Btc15RedeemEngine:
             return
 
         LOGGER.info(
-            "[PERP15] %s | DECISION side=%s entry=$%.4f sh=%d (~$%.2f) | min_up=$%.4f min_dn=$%.4f btc_trend=%+.5f samples=%d",
+            "[PERP15] %s | DECISION side=%s entry=$%.4f sh=%d (~$%.2f) | min_up=$%.4f btc_trend=%+.5f samples=%d",
             contract.slug,
             side,
             entry,
             shares,
             cost,
             min_up,
-            min_down,
             btc_trend,
             len(self._perp15_samples),
         )

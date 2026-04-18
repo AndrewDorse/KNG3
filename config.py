@@ -108,16 +108,16 @@ class BotConfig:
     volume_scalp_entry_min_elapsed: int = 60
     volume_scalp_entry_max_elapsed: int = 840
     volume_scalp_volume_ratio: float = 2.5
-    # BTC 15m perpetual-style: monitor mins + BTC trend, one entry, TP @ 0.99, else hold to settlement.
-    btc_perp15_monitor_seconds: int = 180
-    btc_perp15_btc_trend_threshold: float = 0.002
+    # BTC 15m perp v2: UP-only, trend-confirmed, no cheaper-side fallback.
+    btc_perp15_monitor_seconds: int = 240
+    btc_perp15_btc_trend_threshold: float = 0.0005
     btc_perp15_entry_min: float = 0.05
-    btc_perp15_entry_max: float = 0.40
+    btc_perp15_entry_max: float = 0.80
     btc_perp15_min_shares: int = 6
     btc_perp15_risk_pct: float = 0.10
-    btc_perp15_tp_price: float = 0.99
+    btc_perp15_tp_price: float = 0.98
     btc_perp15_sample_interval_seconds: float = 5.0
-    btc_perp15_end_dump_seconds_remaining: float = 5.0
+    btc_perp15_end_dump_seconds_remaining: float = 15.0
 
     @property
     def window_size_seconds(self) -> int:
@@ -217,15 +217,15 @@ class BotConfig:
             volume_scalp_entry_min_elapsed=max(0, _env_int("BOT_VOLUME_SCALP_ENTRY_MIN_ELAPSED", 60)),
             volume_scalp_entry_max_elapsed=max(1, _env_int("BOT_VOLUME_SCALP_ENTRY_MAX_ELAPSED", 840)),
             volume_scalp_volume_ratio=_env_float("BOT_VOLUME_SCALP_VOLUME_RATIO", 2.5),
-            btc_perp15_monitor_seconds=max(30, _env_int("BOT_PERP15_MONITOR_SECONDS", 180)),
-            btc_perp15_btc_trend_threshold=_env_float("BOT_PERP15_BTC_TREND_THRESHOLD", 0.002),
+            btc_perp15_monitor_seconds=max(30, _env_int("BOT_PERP15_MONITOR_SECONDS", 240)),
+            btc_perp15_btc_trend_threshold=_env_float("BOT_PERP15_BTC_TREND_THRESHOLD", 0.0005),
             btc_perp15_entry_min=_env_float("BOT_PERP15_ENTRY_MIN", 0.05),
-            btc_perp15_entry_max=_env_float("BOT_PERP15_ENTRY_MAX", 0.40),
+            btc_perp15_entry_max=_env_float("BOT_PERP15_ENTRY_MAX", 0.80),
             btc_perp15_min_shares=max(1, _env_int("BOT_PERP15_MIN_SHARES", 6)),
             btc_perp15_risk_pct=_env_float("BOT_PERP15_RISK_PCT", 0.10),
-            btc_perp15_tp_price=_env_float("BOT_PERP15_TP_PRICE", 0.99),
+            btc_perp15_tp_price=_env_float("BOT_PERP15_TP_PRICE", 0.98),
             btc_perp15_sample_interval_seconds=_env_float("BOT_PERP15_SAMPLE_INTERVAL_SECONDS", 5.0),
-            btc_perp15_end_dump_seconds_remaining=max(1.0, _env_float("BOT_PERP15_END_DUMP_SECONDS_REMAINING", 5.0)),
+            btc_perp15_end_dump_seconds_remaining=max(1.0, _env_float("BOT_PERP15_END_DUMP_SECONDS_REMAINING", 15.0)),
         )
 
 

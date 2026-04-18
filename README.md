@@ -85,11 +85,12 @@ Recommended:
 
 The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
 
-- Monitor the first `180s` of the window and sample BTC every `5s`.
-- Use BTC trend if it is strong enough; otherwise fall back to the cheaper side seen during monitoring.
-- Only enter when the chosen side is in the cheap-entry band `0.05` to `0.40`.
-- Place a `0.99` TP limit after entry.
-- If TP is still open, force-dump only in the final `5s` of the window.
+- Monitor the first `240s` of the window and sample BTC every `5s`.
+- Trade `UP` only, and only when BTC trend is at least `+0.05%` over the monitor window.
+- No cheaper-side fallback and no `DOWN` trades.
+- Only enter when `UP` is in the entry band `0.05` to `0.80`.
+- Place a `0.98` TP limit after entry.
+- If TP is still open, force-dump in the final `15s` of the window.
 
 Optional env vars: `BOT_PERP15_ENTRY_MIN`, `BOT_PERP15_ENTRY_MAX`, `BOT_PERP15_MONITOR_SECONDS`, `BOT_PERP15_SAMPLE_INTERVAL_SECONDS`, `BOT_PERP15_BTC_TREND_THRESHOLD`, `BOT_PERP15_TP_PRICE`, `BOT_PERP15_END_DUMP_SECONDS_REMAINING`, `BOT_PERP15_MIN_SHARES`.
 
