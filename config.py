@@ -32,7 +32,7 @@ class BotConfigError(RuntimeError):
 
 def _normalize_strategy_mode(raw: str | None) -> str:
     """Canonicalize strategy_mode so strategy aliases always match engine guards."""
-    s = (raw or "champ4_6s").strip().lower()
+    s = (raw or "iy2").strip().lower()
     for ch in ("\r", "\n", "\t"):
         s = s.replace(ch, "")
     s = s.replace("-", "_")
@@ -83,7 +83,7 @@ class BotConfig:
     strategy_entry_delay_seconds: int = 24
     strategy_new_order_cutoff_seconds: int = 30
     strategy_fill_grace_seconds: float = 5.0
-    strategy_stale_order_seconds: float = 20.0
+    strategy_stale_order_seconds: float = 8.0
     strategy_max_live_orders: int = 4
     strategy_heartbeat_interval_seconds: int = 15
     strategy_price_record_interval_seconds: float = 1.0
@@ -104,7 +104,7 @@ class BotConfig:
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
     # champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
-    strategy_mode: str = "champ4_6s"
+    strategy_mode: str = "iy2"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_stop_offset: float = 0.05
@@ -203,7 +203,7 @@ class BotConfig:
             strategy_entry_delay_seconds=_env_int("BOT_STRATEGY_ENTRY_DELAY_SECONDS", 24),
             strategy_new_order_cutoff_seconds=_env_int("BOT_STRATEGY_NEW_ORDER_CUTOFF_SECONDS", 30),
             strategy_fill_grace_seconds=_env_float("BOT_STRATEGY_FILL_GRACE_SECONDS", 5.0),
-            strategy_stale_order_seconds=_env_float("BOT_STRATEGY_STALE_ORDER_SECONDS", 20.0),
+            strategy_stale_order_seconds=_env_float("BOT_STRATEGY_STALE_ORDER_SECONDS", 8.0),
             strategy_max_live_orders=_env_int("BOT_STRATEGY_MAX_LIVE_ORDERS", 4),
             strategy_heartbeat_interval_seconds=_env_int("BOT_STRATEGY_HEARTBEAT_INTERVAL_SECONDS", 15),
             strategy_price_record_interval_seconds=_env_float("BOT_STRATEGY_PRICE_RECORD_INTERVAL_SECONDS", 1.0),
@@ -223,7 +223,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "champ4_6s")),
+            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "iy2")),
             volume_scalp_tp_offset=volume_scalp_tp_raw,
             volume_scalp_stop_offset=_env_float("BOT_VOLUME_SCALP_STOP_OFFSET", 0.05),
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),

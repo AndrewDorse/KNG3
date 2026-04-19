@@ -28,7 +28,7 @@ from trader import PolymarketTrader
 
 _REPO_ROOT = Path(__file__).resolve().parent
 MIMIC_PARAMS_JSON = _REPO_ROOT / "exports" / "wallet10_mimic_search.json"
-IY2_PARAMS_JSON = _REPO_ROOT / "exports" / "iy2_combined_search" / "summary.json"
+IY2_PARAMS_JSON = _REPO_ROOT / "strategy_params" / "iy2_summary.json"
 AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
 STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
 STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"

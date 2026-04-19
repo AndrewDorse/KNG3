@@ -88,9 +88,13 @@ The deployment example uses `BOT_STRATEGY_MODE=iy2`. Behavior:
 - Hold to redeem by default; in the last `30s` it can place `0.99` TP sell limits on both sides to try to free cash.
 - Uses `5`-share lot rounding with notional-target legs.
 - Core actions: base pair build, winner add, hedge, repair, maintenance pair, rebalance, safety hedge, value build, deep value.
-- Live params are loaded from `/app/exports/iy2_combined_search/summary.json`.
+- Live params are loaded from `/app/strategy_params/iy2_summary.json`.
 
-Core env vars: `BOT_STRATEGY_MODE`, `BOT_SHARES_PER_LEVEL`, `BOT_STRATEGY_ENTRY_DELAY_SECONDS`.
+Core env vars: `BOT_STRATEGY_MODE`, `BOT_SHARES_PER_LEVEL`, `BOT_STRATEGY_ENTRY_DELAY_SECONDS`, `BOT_STRATEGY_STALE_ORDER_SECONDS`.
+
+Recommended live hardening for `iy2`:
+
+- `BOT_STRATEGY_STALE_ORDER_SECONDS=8`
 
 The live runtime uses the repo's poll-based BTC feed and CLOB access, not a streaming L2 WebSocket.
 
@@ -100,7 +104,7 @@ If you switch to `mimic_lot`, the bot may look for:
 
 For `iy2`, the bot looks for:
 
-- `/app/exports/iy2_combined_search/summary.json`
+- `/app/strategy_params/iy2_summary.json`
 
 In that case, provide the file through the mounted `/app/exports` volume before starting the container.
 
