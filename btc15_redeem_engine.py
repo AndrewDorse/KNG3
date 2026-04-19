@@ -68,7 +68,19 @@ def _load_best_params_json(path: Path) -> dict[str, float] | None:
         data = json.loads(path.read_text(encoding="utf-8"))
         raw = data.get("best_params")
         if isinstance(raw, dict) and raw:
-            return raw  # type: ignore[return-value]
+            merged = dict(raw)
+            for key in (
+                "bucket_targets",
+                "freeze_roi",
+                "improvement_min",
+                "cheap_buffer",
+                "candidate_share_cap",
+                "same_side_dedupe_seconds",
+                "same_side_dedupe_price_band",
+            ):
+                if key in data:
+                    merged[key] = data[key]
+            return merged  # type: ignore[return-value]
     except (OSError, json.JSONDecodeError, TypeError, KeyError):
         pass
     return None
@@ -1108,22 +1120,18 @@ class Btc15RedeemEngine:
         elif self._strategy_mode_iy2():
             p = self._iy2_params
             LOGGER.info(
-                "[STRATEGY PARAMS] %s | profile=%s | iy2_json=%s | entry=%ss cutoff=%ss | "
-                "base=$%.0f winner=$%.0f hedge=$%.0f repair=$%.0f maint=$%.0f rebalance=$%.0f safety=$%.0f value=$%.0f deep=$%.0f",
+                "[STRATEGY PARAMS] %s | profile=%s | iy2_json=%s | wallet_path buckets=%d | entry=%ss cutoff=%ss | "
+                "freeze=%.2f improve=%.3f cheap_buf=%.2f share_cap=%s",
                 contract.slug,
                 self._profile_label(),
                 IY2_PARAMS_JSON.name,
+                len(p.get("bucket_targets", []) or []),
                 p.get("entry_delay"),
                 p.get("cutoff"),
-                p.get("base_notional", 0.0),
-                p.get("winner_notional", 0.0),
-                p.get("hedge_notional", 0.0),
-                p.get("repair_notional", 0.0),
-                p.get("maintenance_notional", 0.0),
-                p.get("rebalance_notional", 0.0),
-                p.get("safety_notional", 0.0),
-                p.get("value_notional", 0.0),
-                p.get("deep_notional", 0.0),
+                float(p.get("freeze_roi", 0.05) or 0.05),
+                float(p.get("improvement_min", 0.015) or 0.015),
+                float(p.get("cheap_buffer", 0.03) or 0.03),
+                p.get("candidate_share_cap", 25),
             )
         elif self._strategy_mode_mimic():
             mp = self._mimic_params
@@ -3937,6 +3945,81 @@ class Btc15RedeemEngine:
         )
         return True
 
+    def _iy2_wallet_bucket_target(self, bucket_idx: int, budget_cap: float) -> dict[str, float | str]:
+        rows = self._iy2_params.get("bucket_targets")
+        if not isinstance(rows, list) or not rows:
+            label = f"{bucket_idx*30:03d}-{bucket_idx*30+29:03d}"
+            return {
+                "bucket_label": label,
+                "up_notional_target": 0.0,
+                "down_notional_target": 0.0,
+                "avg_up_target": 0.0,
+                "avg_down_target": 0.0,
+                "up_shares_target": 0.0,
+                "down_shares_target": 0.0,
+                "up_share_ratio_0_1": 0.5,
+            }
+        idx = min(max(int(bucket_idx), 0), len(rows) - 1)
+        row = rows[idx] if isinstance(rows[idx], dict) else {}
+        up_notional = budget_cap * float(row.get("cum_up_notional_frac", 0.0) or 0.0)
+        down_notional = budget_cap * float(row.get("cum_down_notional_frac", 0.0) or 0.0)
+        avg_up_target = float(row.get("avg_up", 0.0) or 0.0)
+        avg_down_target = float(row.get("avg_down", 0.0) or 0.0)
+        up_shares_target = (up_notional / avg_up_target) if avg_up_target > 0 else 0.0
+        down_shares_target = (down_notional / avg_down_target) if avg_down_target > 0 else 0.0
+        return {
+            "bucket_label": str(row.get("bucket_label") or f"{bucket_idx*30:03d}-{bucket_idx*30+29:03d}"),
+            "up_notional_target": up_notional,
+            "down_notional_target": down_notional,
+            "avg_up_target": avg_up_target,
+            "avg_down_target": avg_down_target,
+            "up_shares_target": up_shares_target,
+            "down_shares_target": down_shares_target,
+            "up_share_ratio_0_1": float(row.get("up_share_ratio_0_1", 0.5) or 0.5),
+        }
+
+    def _iy2_wallet_path_distance(
+        self,
+        up_shares: float,
+        down_shares: float,
+        up_cost: float,
+        down_cost: float,
+        target: dict[str, float | str],
+        budget_cap: float,
+        freeze_roi: float,
+    ) -> float:
+        total_cost = up_cost + down_cost
+        if total_cost > 0:
+            up_roi = (up_shares / total_cost) - 1.0
+            down_roi = (down_shares / total_cost) - 1.0
+        else:
+            up_roi = down_roi = 0.0
+        target_up_shares = float(target.get("up_shares_target", 0.0) or 0.0)
+        target_down_shares = float(target.get("down_shares_target", 0.0) or 0.0)
+        target_up_notional = float(target.get("up_notional_target", 0.0) or 0.0)
+        target_down_notional = float(target.get("down_notional_target", 0.0) or 0.0)
+        target_avg_up = float(target.get("avg_up_target", 0.0) or 0.0)
+        target_avg_down = float(target.get("avg_down_target", 0.0) or 0.0)
+        target_ratio = float(target.get("up_share_ratio_0_1", 0.5) or 0.5)
+        size_gap = (
+            abs(up_shares - target_up_shares) / max(target_up_shares, float(max(1, self.config.shares_per_level)))
+            + abs(down_shares - target_down_shares) / max(target_down_shares, float(max(1, self.config.shares_per_level)))
+        )
+        notional_gap = (
+            abs(up_cost - target_up_notional) / max(budget_cap, 1.0)
+            + abs(down_cost - target_down_notional) / max(budget_cap, 1.0)
+        )
+        avg_gap = 0.0
+        if target_up_shares > 0 and up_shares > 0 and target_avg_up > 0:
+            avg_gap += abs((up_cost / up_shares) - target_avg_up)
+        if target_down_shares > 0 and down_shares > 0 and target_avg_down > 0:
+            avg_gap += abs((down_cost / down_shares) - target_avg_down)
+        total_shares = up_shares + down_shares
+        ratio = (up_shares / total_shares) if total_shares > 0 else 0.5
+        ratio_gap = abs(ratio - target_ratio)
+        risk_gap = max(0.0, freeze_roi - up_roi) + max(0.0, freeze_roi - down_roi)
+        return 1.5 * size_gap + 1.1 * notional_gap + 0.9 * avg_gap + 0.8 * ratio_gap + 0.35 * risk_gap
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -3956,247 +4039,99 @@ class Btc15RedeemEngine:
         local_down_shares = float(snapshot.down_shares)
         local_up_cost = float(snapshot.up_spend)
         local_down_cost = float(snapshot.down_spend)
-        book_live = (local_up_cost + local_down_cost) > 0
-        two_sided_live = local_up_shares > 0 and local_down_shares > 0
-
-        def current_rois() -> tuple[float, float]:
-            total = local_up_cost + local_down_cost
-            if total <= 0:
-                return 0.0, 0.0
-            return (local_up_shares / total) - 1.0, (local_down_shares / total) - 1.0
-
-        def apply_virtual_buy(side_label: str, notional: float) -> bool:
-            nonlocal local_up_shares, local_down_shares, local_up_cost, local_down_cost
-            ref = self._side_price(side_label)
-            if ref <= 0:
-                return False
-            shares, _ = self._iy2_shares_for_notional(notional, ref)
-            actual_cost = shares * ref
-            if side_label == "UP":
-                local_up_shares += shares
-                local_up_cost += actual_cost
-            else:
-                local_down_shares += shares
-                local_down_cost += actual_cost
-            return True
-
-        pair_sum = up_price + down_price
-        spread = abs(up_price - down_price)
-        current_winner = "UP" if up_price >= down_price else "DOWN"
-        current_loser = "DOWN" if current_winner == "UP" else "UP"
-        win_px = up_price if current_winner == "UP" else down_price
-        lose_px = down_price if current_winner == "UP" else up_price
-
-        prev30_btc = self._iy2_btc_price_lookback(30) or self._window_open_btc_price or 0.0
-        prev90_btc = self._iy2_btc_price_lookback(90) or prev30_btc
-        btc_now = self._last_btc_price or 0.0
-        btc_move30 = btc_now - prev30_btc if btc_now > 0 and prev30_btc > 0 else 0.0
-        btc_move90 = btc_now - prev90_btc if btc_now > 0 and prev90_btc > 0 else 0.0
-        prev30_win = self._iy2_price_lookback(current_winner, 30) or win_px
-        prev90_lose = self._iy2_price_lookback(current_loser, 90) or lose_px
-        winner_move30 = win_px - prev30_win
-        loser_move90 = lose_px - prev90_lose
-
-        up_roi, down_roi = current_rois()
-        positive_book = book_live and up_roi > 0 and down_roi > 0
-        protected = book_live and up_roi >= 0.02 and down_roi >= 0.02
-        weak_roi = min(up_roi, down_roi)
-        strong_roi = max(up_roi, down_roi)
-        total_shares = local_up_shares + local_down_shares
-        dominant_share_ratio = (max(local_up_shares, local_down_shares) / total_shares) if total_shares > 0 else 0.0
-        one_sided_live = book_live and not two_sided_live
-        needs_protection = book_live and weak_roi < 0.02
-        book_too_lopsided_to_press = book_live and dominant_share_ratio >= 0.64
-        good_pair = snapshot.pair_avg_sum > 0 and snapshot.pair_avg_sum <= 1.01
-        if protected and good_pair:
-            self._iy2_base_locked = True
-            self._no_signal_reason = "iy2: protected balanced book frozen"
+        freeze_roi = float(p.get("freeze_roi", 0.05) or 0.05)
+        improvement_min = float(p.get("improvement_min", 0.015) or 0.015)
+        cheap_buffer = float(p.get("cheap_buffer", 0.03) or 0.03)
+        dedupe_seconds = float(p.get("same_side_dedupe_seconds", 30.0) or 30.0)
+        dedupe_band = float(p.get("same_side_dedupe_price_band", 0.02) or 0.02)
+        candidate_share_cap = max(
+            self.config.shares_per_level,
+            int(math.ceil(float(p.get("candidate_share_cap", 25) or 25) / max(1, self.config.shares_per_level)) * max(1, self.config.shares_per_level)),
+        )
+        budget_cap = max(1.0, float(self._window_budget_usdc or self.config.strategy_budget_cap_usdc))
+        total_cost = local_up_cost + local_down_cost
+        up_roi = (local_up_shares / total_cost) - 1.0 if total_cost > 0 else 0.0
+        down_roi = (local_down_shares / total_cost) - 1.0 if total_cost > 0 else 0.0
+        if total_cost > 0 and up_roi >= freeze_roi and down_roi >= freeze_roi:
+            self._no_signal_reason = "iy2: both-side freeze threshold reached"
             return
 
-        if (
-            elapsed <= p["base_end"]
-            and not self._iy2_base_locked
-            and pair_sum >= p["pair_min"]
-            and pair_sum <= p["pair_max"]
-            and spread <= p["base_spread_max"]
-            and elapsed - self._iy2_last_base_elapsed >= p["base_cooldown"]
-        ):
-            queued_any = False
-            if local_up_shares <= 0 and self._iy2_queue_candidate(queue, "UP", p["base_notional"], "iy2|base|side=UP"):
-                apply_virtual_buy("UP", p["base_notional"])
-                queued_any = True
-            if local_down_shares <= 0 and self._iy2_queue_candidate(queue, "DOWN", p["base_notional"], "iy2|base|side=DOWN"):
-                apply_virtual_buy("DOWN", p["base_notional"])
-                queued_any = True
-            if queued_any:
-                self._iy2_last_base_elapsed = elapsed
-                if local_up_shares > 0 and local_down_shares > 0:
-                    self._iy2_base_locked = True
+        bucket_idx = min(max(int(elapsed // 30), 0), 29)
+        target = self._iy2_wallet_bucket_target(bucket_idx, budget_cap)
+        current_distance = self._iy2_wallet_path_distance(
+            local_up_shares,
+            local_down_shares,
+            local_up_cost,
+            local_down_cost,
+            target,
+            budget_cap,
+            freeze_roi,
+        )
+        current_min_roi = min(up_roi, down_roi) if total_cost > 0 else 0.0
+        best_candidate: tuple[float, str, int] | None = None
 
-        btc_align_up = btc_move30 >= p["btc_move30_min"] and btc_move90 >= p["btc_move90_min"]
-        btc_align_down = btc_move30 <= -p["btc_move30_min"] and btc_move90 <= -p["btc_move90_min"]
-        btc_aligned = (current_winner == "UP" and btc_align_up) or (current_winner == "DOWN" and btc_align_down)
+        for side_label, ref in (("UP", up_price), ("DOWN", down_price)):
+            if ref <= 0:
+                continue
+            last_fill_elapsed = self._iy2_last_fill_elapsed.get(side_label, -10_000.0)
+            last_fill_price = self._iy2_last_fill_price.get(side_label)
+            if (
+                last_fill_price is not None
+                and (elapsed - last_fill_elapsed) <= dedupe_seconds
+                and abs(ref - float(last_fill_price)) <= dedupe_band
+            ):
+                continue
+            target_notional = float(target["up_notional_target"] if side_label == "UP" else target["down_notional_target"])
+            current_notional = local_up_cost if side_label == "UP" else local_down_cost
+            target_avg = float(target["avg_up_target"] if side_label == "UP" else target["avg_down_target"])
+            notional_gap = target_notional - current_notional
+            for shares in range(max(1, self.config.shares_per_level), candidate_share_cap + 1, max(1, self.config.shares_per_level)):
+                candidate_cost = shares * ref
+                if (total_cost + candidate_cost) > (budget_cap + 1e-9):
+                    continue
+                next_up_shares = local_up_shares + (shares if side_label == "UP" else 0.0)
+                next_down_shares = local_down_shares + (shares if side_label == "DOWN" else 0.0)
+                next_up_cost = local_up_cost + (candidate_cost if side_label == "UP" else 0.0)
+                next_down_cost = local_down_cost + (candidate_cost if side_label == "DOWN" else 0.0)
+                next_total_cost = next_up_cost + next_down_cost
+                next_up_roi = (next_up_shares / next_total_cost) - 1.0 if next_total_cost > 0 else 0.0
+                next_down_roi = (next_down_shares / next_total_cost) - 1.0 if next_total_cost > 0 else 0.0
+                next_distance = self._iy2_wallet_path_distance(
+                    next_up_shares,
+                    next_down_shares,
+                    next_up_cost,
+                    next_down_cost,
+                    target,
+                    budget_cap,
+                    freeze_roi,
+                )
+                improvement = current_distance - next_distance
+                price_ok = target_avg <= 0 or ref <= (target_avg + cheap_buffer)
+                risk_improves = min(next_up_roi, next_down_roi) > (current_min_roi + 0.002)
+                target_catchup = notional_gap > 0.01
+                if improvement >= improvement_min and (price_ok or risk_improves or target_catchup):
+                    if best_candidate is None or improvement > best_candidate[0]:
+                        best_candidate = (improvement, side_label, shares)
 
-        if (
-            spread >= p["winner_spread_min"]
-            and win_px >= p["winner_price_min"]
-            and win_px <= p["winner_price_max"]
-            and winner_move30 >= p["winner_move30_min"]
-            and btc_aligned
-            and not positive_book
-            and not protected
-            and not one_sided_live
-            and not book_too_lopsided_to_press
-            and not needs_protection
-            and (book_live or elapsed <= max(float(p["base_end"]), 180.0))
-            and elapsed - self._iy2_last_winner_elapsed >= p["winner_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, current_winner, p["winner_notional"], f"iy2|winner|side={current_winner}"):
-                apply_virtual_buy(current_winner, p["winner_notional"])
-                self._iy2_last_winner_elapsed = elapsed
+        if best_candidate is None:
+            self._no_signal_reason = "iy2: no wallet-path improvement buy this tick"
+            return
 
-        up_roi, down_roi = current_rois()
-        losing_outcome = "UP" if up_roi < down_roi else "DOWN"
-        losing_roi = up_roi if losing_outcome == "UP" else down_roi
-        if (
-            lose_px <= p["hedge_price_max"]
-            and spread >= p["hedge_spread_min"]
-            and loser_move90 <= p["loser_move90_max"]
-            and losing_roi <= p["hedge_need_roi_max"]
-            and not positive_book
-            and not protected
-            and not one_sided_live
-            and elapsed - self._iy2_last_hedge_elapsed >= p["hedge_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, current_loser, p["hedge_notional"], f"iy2|hedge|side={current_loser}"):
-                apply_virtual_buy(current_loser, p["hedge_notional"])
-                self._iy2_last_hedge_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        losing_outcome = "UP" if up_roi < down_roi else "DOWN"
-        losing_roi = up_roi if losing_outcome == "UP" else down_roi
-        losing_px = up_price if losing_outcome == "UP" else down_price
-        if (
-            elapsed >= p["repair_start"]
-            and losing_roi <= p["repair_need_roi_max"]
-            and losing_px <= p["repair_price_max"]
-            and spread >= p["repair_spread_min"]
-            and not positive_book
-            and not protected
-            and not one_sided_live
-            and elapsed - self._iy2_last_repair_elapsed >= p["repair_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, losing_outcome, p["repair_notional"], f"iy2|repair|side={losing_outcome}"):
-                apply_virtual_buy(losing_outcome, p["repair_notional"])
-                self._iy2_last_repair_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        if (
-            elapsed >= p["late_start"]
-            and min(up_roi, down_roi) >= p["late_both_roi_min"]
-            and spread >= p["late_spread_min"]
-            and win_px >= p["late_winner_price_min"]
-            and not positive_book
-            and not protected
-            and elapsed - self._iy2_last_late_elapsed >= p["late_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, current_winner, p["late_notional"], f"iy2|late|side={current_winner}"):
-                apply_virtual_buy(current_winner, p["late_notional"])
-                self._iy2_last_late_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        if (
-            elapsed >= p["maintenance_start"]
-            and book_live
-            and two_sided_live
-            and min(up_roi, down_roi) >= p["maintenance_roi_min"]
-            and max(up_roi, down_roi) <= p["maintenance_roi_max"]
-            and pair_sum >= p["maintenance_pair_min"]
-            and pair_sum <= p["maintenance_pair_max"]
-            and spread >= p["maintenance_spread_min"]
-            and spread <= p["maintenance_spread_max"]
-            and dominant_share_ratio <= 0.58
-            and protected
-            and elapsed - self._iy2_last_maint_elapsed >= p["maintenance_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, "UP", p["maintenance_notional"], "iy2|maintenance|side=UP") and self._iy2_queue_candidate(queue, "DOWN", p["maintenance_notional"], "iy2|maintenance|side=DOWN"):
-                apply_virtual_buy("UP", p["maintenance_notional"])
-                apply_virtual_buy("DOWN", p["maintenance_notional"])
-                self._iy2_last_maint_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        broken_side = ""
-        broken_roi = 0.0
-        if (local_up_cost + local_down_cost) > 0 and (up_roi < 0.02 or down_roi < 0.02):
-            broken_side = "UP" if up_roi < down_roi else "DOWN"
-            broken_roi = up_roi if broken_side == "UP" else down_roi
-        broken_px = up_price if broken_side == "UP" else down_price if broken_side else 0.0
-        if (
-            broken_side
-            and elapsed >= p["rebalance_start"]
-            and broken_roi <= p["rebalance_need_roi_max"]
-            and broken_px <= p["rebalance_price_max"]
-            and spread >= p["rebalance_spread_min"]
-            and elapsed - self._iy2_last_rebalance_elapsed >= p["rebalance_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, broken_side, p["rebalance_notional"], f"iy2|rebalance|side={broken_side}"):
-                apply_virtual_buy(broken_side, p["rebalance_notional"])
-                self._iy2_last_rebalance_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        weak_side = "UP" if up_roi < down_roi else "DOWN"
-        weak_roi = up_roi if weak_side == "UP" else down_roi
-        strong_roi = down_roi if weak_side == "UP" else up_roi
-        weak_px = up_price if weak_side == "UP" else down_price
-        if (
-            elapsed >= p["safety_start"]
-            and book_live
-            and weak_px <= p["safety_price_max"]
-            and weak_roi <= p["safety_weak_roi_max"]
-            and strong_roi >= p["safety_strong_roi_min"]
-            and spread >= p["safety_spread_min"]
-            and elapsed - self._iy2_last_safety_elapsed >= p["safety_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, weak_side, p["safety_notional"], f"iy2|safety|side={weak_side}"):
-                apply_virtual_buy(weak_side, p["safety_notional"])
-                self._iy2_last_safety_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        cheap_side = "UP" if up_price <= down_price else "DOWN"
-        cheap_px = up_price if cheap_side == "UP" else down_price
-        rich_roi = down_roi if cheap_side == "UP" else up_roi
-        cheap_roi = up_roi if cheap_side == "UP" else down_roi
-        if (
-            elapsed >= p["value_start"]
-            and book_live
-            and cheap_px <= p["value_price_max"]
-            and spread >= p["value_spread_min"]
-            and cheap_roi <= p["value_cheap_roi_max"]
-            and rich_roi >= p["value_rich_roi_min"]
-            and elapsed - self._iy2_last_value_elapsed >= p["value_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, cheap_side, p["value_notional"], f"iy2|value|side={cheap_side}"):
-                apply_virtual_buy(cheap_side, p["value_notional"])
-                self._iy2_last_value_elapsed = elapsed
-
-        up_roi, down_roi = current_rois()
-        cheap_side = "UP" if up_price <= down_price else "DOWN"
-        cheap_px = up_price if cheap_side == "UP" else down_price
-        rich_roi = down_roi if cheap_side == "UP" else up_roi
-        if (
-            elapsed >= p["deep_start"]
-            and book_live
-            and cheap_px <= p["deep_price_max"]
-            and spread >= p["deep_spread_min"]
-            and rich_roi >= p["deep_rich_roi_min"]
-            and elapsed - self._iy2_last_deep_elapsed >= p["deep_cooldown"]
-        ):
-            if self._iy2_queue_candidate(queue, cheap_side, p["deep_notional"], f"iy2|deep|side={cheap_side}"):
-                self._iy2_last_deep_elapsed = elapsed
-
+        improvement, side_label, shares = best_candidate
+        ref = self._side_price(side_label)
+        reason = f"iy2|wallet_path|side={side_label}|bucket={target['bucket_label']}|imp={improvement:.4f}"
+        queue.append(
+            OrderCandidate(
+                side_label=side_label,
+                kind="primary",
+                reference_price=ref,
+                limit_ceiling=min(0.99, round(ref + 0.05, 2)),
+                reason=reason,
+                shares=shares,
+                min_shares=shares,
+            )
+        )
         self._iy2_action_queue.extend(queue)
-        if not self._iy2_action_queue and not self._no_signal_reason:
-            self._no_signal_reason = "iy2: no rule fired this tick"
 
     def _choose_aa1_candidate(
         self,
