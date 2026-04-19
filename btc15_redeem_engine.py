@@ -345,6 +345,7 @@ PHASE_SPEND_CAPS = (
 
 # Twin-style box: two-sided, balance, stop when UP-win and DOWN-win PnL both positive; slow 5-share scaling.
 BOX_STRATEGY_PROFILE_ID = "BOX_balance_both_ways_v1"
+CHAMP4_6S_PROFILE_ID = "CHAMP4_6S_wallet_dual_live_v1"
 BOX_BOTH_WAYS_MIN_PNL_USDC = 0.25
 BOX_MAX_LOTS_PER_SIDE = 10
 BOX_MAX_OPEN_IMBALANCE_ORDERS = 2
@@ -371,6 +372,11 @@ BOX_WINNER_PRICE_MIN = 0.40
 BOX_WINNER_PRICE_MAX = 0.90
 BOX_LOSER_PRICE_MAX = 0.44
 BOX_LOSER_SPREAD_MIN = 0.08
+CHAMP4_ENTRY_DELAY_SECONDS = 24
+CHAMP4_MID1_DELAY_SECONDS = 90
+CHAMP4_MID2_DELAY_SECONDS = 540
+CHAMP4_LATE_DELAY_SECONDS = 600
+CHAMP4_LATE_SPREAD_MIN = 0.12
 S0_PAIR_AVG_MAX = 0.95
 
 
@@ -575,9 +581,19 @@ class Btc15RedeemEngine:
 
         self._box_lot_counts: dict[str, int] = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed: dict[str, float | None] = {"UP": None, "DOWN": None}
+        self._champ4_action_queue: deque[OrderCandidate] = deque()
+        self._champ4_stage_done: dict[str, bool] = {
+            "entry": False,
+            "mid1": False,
+            "mid2": False,
+            "late": False,
+        }
 
     def _strategy_mode_mimic(self) -> bool:
         return self.config.strategy_mode == "mimic_lot" and bool(self._mimic_params)
+
+    def _strategy_mode_champ4_6s(self) -> bool:
+        return self.config.strategy_mode == "champ4_6s"
 
     def _strategy_mode_box_balance(self) -> bool:
         return self.config.strategy_mode == "box_balance"
@@ -611,13 +627,16 @@ class Btc15RedeemEngine:
 
     def _strategy_mode_hold_to_redeem(self) -> bool:
         return (
-            self._strategy_mode_mimic()
+            self._strategy_mode_champ4_6s()
+            or self._strategy_mode_mimic()
             or self._strategy_mode_box_balance()
             or self._strategy_mode_volume_t10()
             or self._strategy_mode_volume_scalp_up()
         )
 
     def _profile_label(self) -> str:
+        if self._strategy_mode_champ4_6s():
+            return CHAMP4_6S_PROFILE_ID
         if self._strategy_mode_box_balance():
             return BOX_STRATEGY_PROFILE_ID
         if self._strategy_mode_mimic():
@@ -796,18 +815,14 @@ class Btc15RedeemEngine:
         elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_volume_t10() and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15():
             self._no_signal_reason = "exit mode active"
         elif elapsed >= self.config.strategy_entry_delay_seconds:
-            if self._strategy_mode_mimic():
+            if self._strategy_mode_champ4_6s():
+                self._champ4_evaluate_tick(elapsed)
+                snapshot = self._process_candidate_queue(contract, snapshot, elapsed, self._champ4_action_queue)
+                if not self._champ4_action_queue and self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            elif self._strategy_mode_mimic():
                 self._mimic_evaluate_tick(elapsed)
-                while self._mimic_action_queue:
-                    candidate = self._mimic_action_queue[0]
-                    open_orders = self._get_contract_orders(contract)
-                    if not self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
-                        break
-                    self._mimic_action_queue.popleft()
-                    if not self._place_candidate(contract, candidate, snapshot, elapsed):
-                        self._mimic_action_queue.appendleft(candidate)
-                        break
-                    snapshot = self._build_snapshot()
+                snapshot = self._process_candidate_queue(contract, snapshot, elapsed, self._mimic_action_queue)
                 if not self._mimic_action_queue and self._no_signal_reason:
                     LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
             elif self._strategy_mode_box_balance():
@@ -959,6 +974,8 @@ class Btc15RedeemEngine:
 
         self._box_lot_counts = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed = {"UP": None, "DOWN": None}
+        self._champ4_action_queue.clear()
+        self._champ4_stage_done = {"entry": False, "mid1": False, "mid2": False, "late": False}
 
         setup_file_logger(contract.slug)
         log_file = next(
@@ -1006,7 +1023,18 @@ class Btc15RedeemEngine:
             self.config.shares_per_level,
             self.config.trade_one_window,
         )
-        if self._strategy_mode_mimic():
+        if self._strategy_mode_champ4_6s():
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | 6-share dual-side hedge | entry=%ds mid1=%ds mid2=%ds late=%ds | "
+                "open=24/12 shares BTC-dir/opposite | mid1=6/12 shares | mid2=opp-heavy hedge | late_confirm=6 shares | hold_to_redeem",
+                contract.slug,
+                self._profile_label(),
+                CHAMP4_ENTRY_DELAY_SECONDS,
+                CHAMP4_MID1_DELAY_SECONDS,
+                CHAMP4_MID2_DELAY_SECONDS,
+                CHAMP4_LATE_DELAY_SECONDS,
+            )
+        elif self._strategy_mode_mimic():
             mp = self._mimic_params
             LOGGER.info(
                 "[STRATEGY PARAMS] %s | profile=%s | mimic_json=%s | entry_delay=%s | cutoff_elapsed=%s | "
@@ -2390,6 +2418,93 @@ class Btc15RedeemEngine:
         if self._last_btc_price is None or self._last_btc_price <= 0:
             return None
         return (self._last_btc_price - self._window_open_btc_price) / self._window_open_btc_price
+
+    def _champ4_btc_direction_side(self) -> str | None:
+        ret = self._volume_t10_btc_return()
+        if ret is None:
+            return None
+        return "UP" if ret >= 0 else "DOWN"
+
+    def _champ4_queue_clip(self, side_label: str, reason: str) -> None:
+        reference_price = self._side_price(side_label)
+        if reference_price <= 0:
+            return
+        self._champ4_action_queue.append(
+            OrderCandidate(
+                side_label=side_label,
+                kind="primary",
+                reference_price=reference_price,
+                limit_ceiling=min(PRIMARY_PRICE_HARD_MAX, reference_price + 0.05),
+                reason=reason,
+                shares=self.config.shares_per_level,
+            )
+        )
+
+    def _champ4_enqueue_clips(self, main_side: str, main_clips: int, hedge_clips: int, reason_prefix: str) -> None:
+        hedge_side = "DOWN" if main_side == "UP" else "UP"
+        max_clips = max(main_clips, hedge_clips)
+        for idx in range(max_clips):
+            if idx < main_clips:
+                self._champ4_queue_clip(main_side, f"{reason_prefix}|main|{idx + 1}")
+            if idx < hedge_clips:
+                self._champ4_queue_clip(hedge_side, f"{reason_prefix}|hedge|{idx + 1}")
+
+    def _champ4_evaluate_tick(self, elapsed: float) -> None:
+        self._no_signal_reason = ""
+        if not self._strategy_mode_champ4_6s():
+            return
+        up_price = self._side_price("UP")
+        down_price = self._side_price("DOWN")
+        if up_price <= 0 or down_price <= 0:
+            self._no_signal_reason = "waiting for both side prices"
+            return
+        btc_side = self._champ4_btc_direction_side()
+        if btc_side is None:
+            self._no_signal_reason = "waiting for BTC direction"
+            return
+        leader_side = "UP" if up_price >= down_price else "DOWN"
+        spread = abs(up_price - down_price)
+
+        if elapsed >= CHAMP4_ENTRY_DELAY_SECONDS and not self._champ4_stage_done["entry"]:
+            self._champ4_enqueue_clips(btc_side, 4, 2, "champ4|entry")
+            self._champ4_stage_done["entry"] = True
+        if elapsed >= CHAMP4_MID1_DELAY_SECONDS and not self._champ4_stage_done["mid1"]:
+            self._champ4_enqueue_clips(btc_side, 1, 2, "champ4|mid1")
+            self._champ4_stage_done["mid1"] = True
+        if elapsed >= CHAMP4_MID2_DELAY_SECONDS and not self._champ4_stage_done["mid2"]:
+            if btc_side == leader_side:
+                hedge_side = "DOWN" if btc_side == "UP" else "UP"
+                self._champ4_queue_clip(hedge_side, "champ4|mid2|agree_hedge")
+            else:
+                self._champ4_enqueue_clips(btc_side, 1, 3, "champ4|mid2|disagree")
+            self._champ4_stage_done["mid2"] = True
+        if elapsed >= CHAMP4_LATE_DELAY_SECONDS and not self._champ4_stage_done["late"]:
+            if btc_side == leader_side and spread >= CHAMP4_LATE_SPREAD_MIN:
+                self._champ4_queue_clip(leader_side, "champ4|late_confirm")
+            self._champ4_stage_done["late"] = True
+
+        if not self._champ4_action_queue and not self._no_signal_reason:
+            self._no_signal_reason = "champ4: no stage fired this tick"
+
+    def _process_candidate_queue(
+        self,
+        contract: ActiveContract,
+        snapshot: BookSnapshot,
+        elapsed: float,
+        queue: deque[OrderCandidate],
+    ) -> BookSnapshot:
+        rounds = len(queue)
+        if rounds <= 0:
+            return snapshot
+        for _ in range(rounds):
+            candidate = queue.popleft()
+            open_orders = self._get_contract_orders(contract)
+            if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
+                if self._place_candidate(contract, candidate, snapshot, elapsed):
+                    snapshot = self._build_snapshot()
+                    continue
+            queue.append(candidate)
+        return snapshot
 
     def _volume_t10_latest_volume_ratio(self) -> float | None:
         rows = self._btc_rows_in_window()

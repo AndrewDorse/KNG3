@@ -31,14 +31,16 @@ class BotConfigError(RuntimeError):
 
 
 def _normalize_strategy_mode(raw: str | None) -> str:
-    """Canonicalize strategy_mode so volume-scalp variants always match engine guards (avoids late $0.99 TP)."""
-    s = (raw or "wd").strip().lower()
+    """Canonicalize strategy_mode so aliases map to the engine's guarded strategy names."""
+    s = (raw or "champ4_6s").strip().lower()
     for ch in ("\r", "\n", "\t"):
         s = s.replace(ch, "")
     s = s.replace("-", "_")
     s = "_".join(s.split())
     if s in ("btc_perp15", "btc_perp_15", "perp15", "btc_15m_perp", "btc_perpetual_15m", "polymarket_btc_15m_perpetual"):
         return "btc_perp15"
+    if s in ("champ4_6s", "champ4", "champ4_live", "wallet_dual", "wallet_dual_live"):
+        return "champ4_6s"
     if s in ("volume_scalp_up", "volume_scalp", "vol_scalp_up"):
         return "volume_scalp_up"
     if "t10" in s:
@@ -66,7 +68,7 @@ class BotConfig:
     force_exit_before_end_seconds: int = 15
     # Ladder config
     ladder_prices: list = field(default_factory=lambda: [0.44, 0.34, 0.24, 0.14])
-    shares_per_level: int = 5
+    shares_per_level: int = 6
     order_cooldown_seconds: float = 3.0
     hedge_offset: float = 0.02
     market_symbol: str = "BTC"
@@ -76,7 +78,7 @@ class BotConfig:
     strategy_budget_cap_usdc: float = 80.0
     strategy_wallet_reserve_usdc: float = 0.0
     strategy_min_budget_usdc: float = 15.0
-    strategy_entry_delay_seconds: int = 35
+    strategy_entry_delay_seconds: int = 24
     strategy_new_order_cutoff_seconds: int = 30
     strategy_fill_grace_seconds: float = 5.0
     strategy_stale_order_seconds: float = 20.0
@@ -99,8 +101,8 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
-    strategy_mode: str = "volume_scalp_up"
+    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15 | champ4_6s
+    strategy_mode: str = "champ4_6s"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_stop_offset: float = 0.05
@@ -185,7 +187,7 @@ class BotConfig:
             request_timeout_seconds=_env_float("BOT_REQUEST_TIMEOUT_SECONDS", 10.0),
             log_level=os.getenv("BOT_LOG_LEVEL", "INFO").upper(),
             force_exit_before_end_seconds=_env_int("BOT_FORCE_EXIT_BEFORE_END_SECONDS", 15),
-            shares_per_level=max(1, _env_int("BOT_SHARES_PER_LEVEL", 5)),
+            shares_per_level=max(1, _env_int("BOT_SHARES_PER_LEVEL", 6)),
             ladder_prices=ladder_prices,
             order_cooldown_seconds=_env_float("BOT_ORDER_COOLDOWN_SECONDS", 3.0),
             hedge_offset=_env_float("BOT_HEDGE_OFFSET", 0.02),
@@ -196,7 +198,7 @@ class BotConfig:
             strategy_budget_cap_usdc=_env_float("BOT_STRATEGY_BUDGET_CAP_USDC", 80.0),
             strategy_wallet_reserve_usdc=_env_float("BOT_STRATEGY_WALLET_RESERVE_USDC", 0.0),
             strategy_min_budget_usdc=_env_float("BOT_STRATEGY_MIN_BUDGET_USDC", 15.0),
-            strategy_entry_delay_seconds=_env_int("BOT_STRATEGY_ENTRY_DELAY_SECONDS", 35),
+            strategy_entry_delay_seconds=_env_int("BOT_STRATEGY_ENTRY_DELAY_SECONDS", 24),
             strategy_new_order_cutoff_seconds=_env_int("BOT_STRATEGY_NEW_ORDER_CUTOFF_SECONDS", 30),
             strategy_fill_grace_seconds=_env_float("BOT_STRATEGY_FILL_GRACE_SECONDS", 5.0),
             strategy_stale_order_seconds=_env_float("BOT_STRATEGY_STALE_ORDER_SECONDS", 20.0),
@@ -219,7 +221,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "volume_scalp_up")),
+            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "champ4_6s")),
             volume_scalp_tp_offset=volume_scalp_tp_raw,
             volume_scalp_stop_offset=_env_float("BOT_VOLUME_SCALP_STOP_OFFSET", 0.05),
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),

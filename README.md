@@ -78,21 +78,23 @@ Recommended:
 ## Go live checklist
 
 1. Set `POLY_PRIVATE_KEY`, `POLY_FUNDER`, and (if needed) relayer env vars in Hostinger only — never in Git.
-2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `btc_perp15`.
+2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `champ4_6s`.
 3. When satisfied, set `POLY_DRY_RUN=false` and redeploy so the bot places real orders.
 
-## Strategy note (`btc_perp15`)
+## Strategy note (`champ4_6s`)
 
-The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
+The deployment example uses `BOT_STRATEGY_MODE=champ4_6s`. Behavior:
 
-- Trade `UP` only.
-- Gate on BTC trend over the first `120s`; require at least `+0.05%`.
-- Place three passive `UP` buy orders for `6` shares each at `0.44`, `0.43`, and `0.40`.
-- Keep entry orders live only until `420s`, then cancel remaining buys.
-- After the buy window ends, place a `0.99` TP sell for the current filled `UP` position.
-- If TP is still open, force-dump in the final `15s` of the window.
+- Hold to redeem; no generic late TP logic.
+- Trade both sides every window in `6`-share clips.
+- At `24s`: queue `24` shares on BTC direction and `12` shares on the opposite side.
+- At `90s`: queue `6` shares on BTC direction and `12` shares opposite.
+- At `540s`:
+  - if BTC direction matches the PM leader, queue `6` hedge shares opposite only
+  - if BTC direction disagrees, queue `6` shares on BTC direction and `18` shares opposite
+- At `600s`: if BTC direction still matches the PM leader and spread is at least `0.12`, queue one more `6`-share leader clip.
 
-Optional env vars: `BOT_PERP15_MONITOR_SECONDS`, `BOT_PERP15_SAMPLE_INTERVAL_SECONDS`, `BOT_PERP15_BTC_TREND_THRESHOLD`, `BOT_PERP15_ENTRY_WINDOW_SECONDS`, `BOT_PERP15_LADDER_PRICES`, `BOT_PERP15_TP_PRICE`, `BOT_PERP15_END_DUMP_SECONDS_REMAINING`, `BOT_PERP15_MIN_SHARES`.
+Core env vars: `BOT_STRATEGY_MODE`, `BOT_SHARES_PER_LEVEL`, `BOT_STRATEGY_ENTRY_DELAY_SECONDS`.
 
 The live runtime uses the repo's poll-based BTC feed and CLOB access, not a streaming L2 WebSocket.
 
