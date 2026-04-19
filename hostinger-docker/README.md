@@ -71,29 +71,25 @@ Recommended:
 ## Go live checklist
 
 1. Set secrets only in Hostinger env (never in Git).
-2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `btc_perp15`.
+2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `iy2`.
 3. Set `POLY_DRY_RUN=false` to trade for real.
 
-## Strategy note (`btc_perp15`)
+## Strategy note (`iy2`)
 
-The deployment example uses `BOT_STRATEGY_MODE=btc_perp15`. Behavior:
+The deployment example uses `BOT_STRATEGY_MODE=iy2`. Behavior:
 
-- Trade `UP` only
-- Gate on BTC trend over the first `120s`; require at least `+0.05%`
-- Place three passive `UP` buy orders for `6` shares each at `0.44`, `0.43`, and `0.40`
-- Keep entry orders live only until `420s`, then cancel remaining buys
-- After the buy window ends, rest a `0.99` TP limit for the filled `UP` position
-- If TP is still open, force-dump in the last `15s`
+- Trade both sides using `5`-share lot rounding with notional-based legs
+- Core actions: base pair build, winner add, hedge, repair, maintenance pair, rebalance, safety, value, deep value
+- Entry params are loaded from `/app/strategy_params/iy2_summary.json`
+- Late stale-order hardening uses `BOT_STRATEGY_STALE_ORDER_SECONDS=8`
 
-Optional tuning lives in `.env.example` under `BOT_PERP15_*`.
+Core tuning lives in `.env.example` under the regular `BOT_STRATEGY_*` vars.
 
 Poll-based BTC and CLOB only.
 
-If you switch to `mimic_lot`, the bot may look for:
+`iy2` no longer depends on `/app/exports`; the params file is baked into the image at:
 
-- `/app/exports/wallet10_mimic_search.json`
-
-In that case, provide the file through the mounted `/app/exports` volume before starting the container.
+- `/app/strategy_params/iy2_summary.json`
 
 ## Security
 

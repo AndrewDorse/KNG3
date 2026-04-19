@@ -21,6 +21,7 @@ COPY trader.py /app/trader.py
 COPY signal_analyzer.py /app/signal_analyzer.py
 COPY http_session.py /app/http_session.py
 COPY btc_price_feed.py /app/btc_price_feed.py
+COPY strategy_params /app/strategy_params
 
 RUN mkdir -p /app/logs /app/exports && \
     chown -R appuser:appuser /app
