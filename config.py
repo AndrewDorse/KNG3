@@ -31,7 +31,7 @@ class BotConfigError(RuntimeError):
 
 
 def _normalize_strategy_mode(raw: str | None) -> str:
-    """Canonicalize strategy_mode so aliases map to the engine's guarded strategy names."""
+    """Canonicalize strategy_mode so strategy aliases always match engine guards."""
     s = (raw or "champ4_6s").strip().lower()
     for ch in ("\r", "\n", "\t"):
         s = s.replace(ch, "")
@@ -39,10 +39,12 @@ def _normalize_strategy_mode(raw: str | None) -> str:
     s = "_".join(s.split())
     if s in ("btc_perp15", "btc_perp_15", "perp15", "btc_15m_perp", "btc_perpetual_15m", "polymarket_btc_15m_perpetual"):
         return "btc_perp15"
-    if s in ("champ4_6s", "champ4", "champ4_live", "wallet_dual", "wallet_dual_live"):
-        return "champ4_6s"
     if s in ("volume_scalp_up", "volume_scalp", "vol_scalp_up"):
         return "volume_scalp_up"
+    if s in ("champ4_6s", "champ4", "champ4_live", "wallet_dual", "wallet_dual_live"):
+        return "champ4_6s"
+    if s in ("iy2", "iy_2", "wallet_overlap", "wallet_overlap_live", "iy2_live"):
+        return "iy2"
     if "t10" in s:
         return s
     if "scalp" in s and "volume" in s:
@@ -68,7 +70,7 @@ class BotConfig:
     force_exit_before_end_seconds: int = 15
     # Ladder config
     ladder_prices: list = field(default_factory=lambda: [0.44, 0.34, 0.24, 0.14])
-    shares_per_level: int = 6
+    shares_per_level: int = 5
     order_cooldown_seconds: float = 3.0
     hedge_offset: float = 0.02
     market_symbol: str = "BTC"
@@ -101,7 +103,7 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15 | champ4_6s
+    # champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
     strategy_mode: str = "champ4_6s"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
@@ -187,7 +189,7 @@ class BotConfig:
             request_timeout_seconds=_env_float("BOT_REQUEST_TIMEOUT_SECONDS", 10.0),
             log_level=os.getenv("BOT_LOG_LEVEL", "INFO").upper(),
             force_exit_before_end_seconds=_env_int("BOT_FORCE_EXIT_BEFORE_END_SECONDS", 15),
-            shares_per_level=max(1, _env_int("BOT_SHARES_PER_LEVEL", 6)),
+            shares_per_level=max(1, _env_int("BOT_SHARES_PER_LEVEL", 5)),
             ladder_prices=ladder_prices,
             order_cooldown_seconds=_env_float("BOT_ORDER_COOLDOWN_SECONDS", 3.0),
             hedge_offset=_env_float("BOT_HEDGE_OFFSET", 0.02),

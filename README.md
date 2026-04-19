@@ -78,21 +78,17 @@ Recommended:
 ## Go live checklist
 
 1. Set `POLY_PRIVATE_KEY`, `POLY_FUNDER`, and (if needed) relayer env vars in Hostinger only — never in Git.
-2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `champ4_6s`.
+2. Deploy with `POLY_DRY_RUN=true` first; confirm logs show market discovery, BTC feed, and `[STRATEGY PARAMS]` for `iy2`.
 3. When satisfied, set `POLY_DRY_RUN=false` and redeploy so the bot places real orders.
 
-## Strategy note (`champ4_6s`)
+## Strategy note (`iy2`)
 
-The deployment example uses `BOT_STRATEGY_MODE=champ4_6s`. Behavior:
+The deployment example uses `BOT_STRATEGY_MODE=iy2`. Behavior:
 
-- Hold to redeem; no generic late TP logic.
-- Trade both sides every window in `6`-share clips.
-- At `24s`: queue `24` shares on BTC direction and `12` shares on the opposite side.
-- At `90s`: queue `6` shares on BTC direction and `12` shares opposite.
-- At `540s`:
-  - if BTC direction matches the PM leader, queue `6` hedge shares opposite only
-  - if BTC direction disagrees, queue `6` shares on BTC direction and `18` shares opposite
-- At `600s`: if BTC direction still matches the PM leader and spread is at least `0.12`, queue one more `6`-share leader clip.
+- Hold to redeem by default; in the last `30s` it can place `0.99` TP sell limits on both sides to try to free cash.
+- Uses `5`-share lot rounding with notional-target legs.
+- Core actions: base pair build, winner add, hedge, repair, maintenance pair, rebalance, safety hedge, value build, deep value.
+- Live params are loaded from `/app/exports/iy2_combined_search/summary.json`.
 
 Core env vars: `BOT_STRATEGY_MODE`, `BOT_SHARES_PER_LEVEL`, `BOT_STRATEGY_ENTRY_DELAY_SECONDS`.
 
@@ -101,6 +97,10 @@ The live runtime uses the repo's poll-based BTC feed and CLOB access, not a stre
 If you switch to `mimic_lot`, the bot may look for:
 
 - `/app/exports/wallet10_mimic_search.json`
+
+For `iy2`, the bot looks for:
+
+- `/app/exports/iy2_combined_search/summary.json`
 
 In that case, provide the file through the mounted `/app/exports` volume before starting the container.
 

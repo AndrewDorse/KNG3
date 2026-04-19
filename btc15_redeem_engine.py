@@ -28,10 +28,12 @@ from trader import PolymarketTrader
 
 _REPO_ROOT = Path(__file__).resolve().parent
 MIMIC_PARAMS_JSON = _REPO_ROOT / "exports" / "wallet10_mimic_search.json"
+IY2_PARAMS_JSON = _REPO_ROOT / "exports" / "iy2_combined_search" / "summary.json"
 AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
 STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
 STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"
 MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
+IY2_STRATEGY_PROFILE_ID = "IY2_wallet_overlap_v1"
 WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
 VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
@@ -54,6 +56,17 @@ def _load_mimic_search_params(path: Path) -> dict[str, float] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         raw = data.get("best", {}).get("params")
+        if isinstance(raw, dict) and raw:
+            return raw  # type: ignore[return-value]
+    except (OSError, json.JSONDecodeError, TypeError, KeyError):
+        pass
+    return None
+
+
+def _load_best_params_json(path: Path) -> dict[str, float] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = data.get("best_params")
         if isinstance(raw, dict) and raw:
             return raw  # type: ignore[return-value]
     except (OSError, json.JSONDecodeError, TypeError, KeyError):
@@ -333,6 +346,7 @@ SUB_TWO_SHARE_MARKET_CHECK_SECONDS = 5.0
 # btc_perp15: min seconds between end-window market dump attempts per side (avoid spam).
 BTC_PERP15_END_DUMP_THROTTLE_SECONDS = 2.0
 EXIT_RECONCILE_INTERVAL_SECONDS = 30.0
+HOLD_TO_REDEEM_RELEASE_SECONDS = 30.0
 # "current" phase ramp (same as run_named_profiles strategy_0 / price-history replay).
 PHASE_SPEND_CAPS = (
     (60, 0.05),
@@ -372,12 +386,13 @@ BOX_WINNER_PRICE_MIN = 0.40
 BOX_WINNER_PRICE_MAX = 0.90
 BOX_LOSER_PRICE_MAX = 0.44
 BOX_LOSER_SPREAD_MIN = 0.08
+S0_PAIR_AVG_MAX = 0.95
+
 CHAMP4_ENTRY_DELAY_SECONDS = 24
 CHAMP4_MID1_DELAY_SECONDS = 90
 CHAMP4_MID2_DELAY_SECONDS = 540
 CHAMP4_LATE_DELAY_SECONDS = 600
 CHAMP4_LATE_SPREAD_MIN = 0.12
-S0_PAIR_AVG_MAX = 0.95
 
 
 @dataclass(slots=True)
@@ -579,6 +594,28 @@ class Btc15RedeemEngine:
                     MIMIC_PARAMS_JSON,
                 )
 
+        self._iy2_params: dict[str, float] = {}
+        self._iy2_action_queue: deque[OrderCandidate] = deque()
+        self._iy2_last_base_elapsed = -10_000.0
+        self._iy2_last_winner_elapsed = -10_000.0
+        self._iy2_last_hedge_elapsed = -10_000.0
+        self._iy2_last_repair_elapsed = -10_000.0
+        self._iy2_last_late_elapsed = -10_000.0
+        self._iy2_last_maint_elapsed = -10_000.0
+        self._iy2_last_rebalance_elapsed = -10_000.0
+        self._iy2_last_safety_elapsed = -10_000.0
+        self._iy2_last_value_elapsed = -10_000.0
+        self._iy2_last_deep_elapsed = -10_000.0
+        if self.config.strategy_mode == "iy2":
+            loaded = _load_best_params_json(IY2_PARAMS_JSON)
+            if loaded:
+                self._iy2_params = loaded
+            else:
+                LOGGER.error(
+                    "strategy_mode=iy2 but could not load params from %s â€” falling back to aa1",
+                    IY2_PARAMS_JSON,
+                )
+
         self._box_lot_counts: dict[str, int] = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed: dict[str, float | None] = {"UP": None, "DOWN": None}
         self._champ4_action_queue: deque[OrderCandidate] = deque()
@@ -594,6 +631,9 @@ class Btc15RedeemEngine:
 
     def _strategy_mode_champ4_6s(self) -> bool:
         return self.config.strategy_mode == "champ4_6s"
+
+    def _strategy_mode_iy2(self) -> bool:
+        return self.config.strategy_mode == "iy2" and bool(self._iy2_params)
 
     def _strategy_mode_box_balance(self) -> bool:
         return self.config.strategy_mode == "box_balance"
@@ -628,6 +668,7 @@ class Btc15RedeemEngine:
     def _strategy_mode_hold_to_redeem(self) -> bool:
         return (
             self._strategy_mode_champ4_6s()
+            or self._strategy_mode_iy2()
             or self._strategy_mode_mimic()
             or self._strategy_mode_box_balance()
             or self._strategy_mode_volume_t10()
@@ -637,6 +678,8 @@ class Btc15RedeemEngine:
     def _profile_label(self) -> str:
         if self._strategy_mode_champ4_6s():
             return CHAMP4_6S_PROFILE_ID
+        if self._strategy_mode_iy2():
+            return IY2_STRATEGY_PROFILE_ID
         if self._strategy_mode_box_balance():
             return BOX_STRATEGY_PROFILE_ID
         if self._strategy_mode_mimic():
@@ -783,9 +826,10 @@ class Btc15RedeemEngine:
 
         open_orders = self._get_contract_orders(contract)
         self._maybe_enter_early_exit_mode(contract)
+        allow_hold_release = self._strategy_mode_hold_to_redeem() and seconds_remaining <= HOLD_TO_REDEEM_RELEASE_SECONDS
         if (
             not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_signal_only()
-        ) or self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15():
+        ) or self._strategy_mode_volume_t10() or self._strategy_mode_volume_scalp_up() or self._strategy_mode_btc_perp15() or allow_hold_release:
             self._manage_exit_orders(contract, open_orders)
             self._maybe_btc_perp15_end_window_market_dump(contract, seconds_remaining)
             self._cleanup_small_leftovers(contract, seconds_remaining, time.time())
@@ -814,11 +858,20 @@ class Btc15RedeemEngine:
             )
         elif self._tp_phase_started and not self._strategy_mode_hold_to_redeem() and not self._strategy_mode_volume_t10() and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15():
             self._no_signal_reason = "exit mode active"
-        elif elapsed >= self.config.strategy_entry_delay_seconds:
+        elif elapsed >= (
+            int(self._iy2_params.get("entry_delay", self.config.strategy_entry_delay_seconds))
+            if self._strategy_mode_iy2()
+            else self.config.strategy_entry_delay_seconds
+        ):
             if self._strategy_mode_champ4_6s():
                 self._champ4_evaluate_tick(elapsed)
                 snapshot = self._process_candidate_queue(contract, snapshot, elapsed, self._champ4_action_queue)
                 if not self._champ4_action_queue and self._no_signal_reason:
+                    LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
+            elif self._strategy_mode_iy2():
+                self._iy2_evaluate_tick(snapshot, elapsed, seconds_remaining)
+                snapshot = self._process_candidate_queue(contract, snapshot, elapsed, self._iy2_action_queue)
+                if not self._iy2_action_queue and self._no_signal_reason:
                     LOGGER.debug("[WAIT] %s | %s", contract.slug, self._no_signal_reason)
             elif self._strategy_mode_mimic():
                 self._mimic_evaluate_tick(elapsed)
@@ -1033,6 +1086,26 @@ class Btc15RedeemEngine:
                 CHAMP4_MID1_DELAY_SECONDS,
                 CHAMP4_MID2_DELAY_SECONDS,
                 CHAMP4_LATE_DELAY_SECONDS,
+            )
+        elif self._strategy_mode_iy2():
+            p = self._iy2_params
+            LOGGER.info(
+                "[STRATEGY PARAMS] %s | profile=%s | iy2_json=%s | entry=%ss cutoff=%ss | "
+                "base=$%.0f winner=$%.0f hedge=$%.0f repair=$%.0f maint=$%.0f rebalance=$%.0f safety=$%.0f value=$%.0f deep=$%.0f",
+                contract.slug,
+                self._profile_label(),
+                IY2_PARAMS_JSON.name,
+                p.get("entry_delay"),
+                p.get("cutoff"),
+                p.get("base_notional", 0.0),
+                p.get("winner_notional", 0.0),
+                p.get("hedge_notional", 0.0),
+                p.get("repair_notional", 0.0),
+                p.get("maintenance_notional", 0.0),
+                p.get("rebalance_notional", 0.0),
+                p.get("safety_notional", 0.0),
+                p.get("value_notional", 0.0),
+                p.get("deep_notional", 0.0),
             )
         elif self._strategy_mode_mimic():
             mp = self._mimic_params
@@ -1702,7 +1775,9 @@ class Btc15RedeemEngine:
             LOGGER.info("[EARLY EXIT] %s | winner_side=%s", contract.slug, winner_side)
 
     def _manage_exit_orders(self, contract: ActiveContract, open_orders: list[dict[str, Any]]) -> None:
-        if not self._tp_phase_started and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15():
+        seconds_remaining = max(0.0, contract.end_time.timestamp() - time.time())
+        hold_release_active = self._strategy_mode_hold_to_redeem() and seconds_remaining <= HOLD_TO_REDEEM_RELEASE_SECONDS
+        if not self._tp_phase_started and not self._strategy_mode_volume_scalp_up() and not self._strategy_mode_btc_perp15() and not hold_release_active:
             return
 
         open_ids = self._extract_live_ids(open_orders)
@@ -1711,6 +1786,17 @@ class Btc15RedeemEngine:
 
         if self._strategy_mode_btc_perp15():
             self._btc_perp15_ensure_tp_limit(contract)
+            return
+
+        if hold_release_active:
+            for side_label in ("UP", "DOWN"):
+                self._ensure_exit_sell(
+                    contract,
+                    side_label,
+                    self._desired_exit_price(contract, side_label, "tp"),
+                    purpose="tp",
+                )
+            self._force_late_exit_cleanup(contract)
             return
 
         if self._exit_mode_winner_side is not None:
@@ -3721,6 +3807,293 @@ class Btc15RedeemEngine:
 
         if not self._mimic_action_queue and not self._no_signal_reason:
             self._no_signal_reason = "mimic: no rule fired this tick"
+
+    def _iy2_price_lookback(self, side_label: str, lookback_seconds: int) -> float | None:
+        if not self._price_history:
+            return None
+        target_ts = self._last_price_time - lookback_seconds
+        for point in reversed(self._price_history):
+            if point.ts <= target_ts:
+                return point.up_price if side_label == "UP" else point.down_price
+        oldest = self._price_history[0]
+        return oldest.up_price if side_label == "UP" else oldest.down_price
+
+    def _iy2_btc_price_lookback(self, lookback_seconds: int) -> float | None:
+        if not self._btc_price_history:
+            return None
+        target_ts = self._last_price_time - lookback_seconds
+        for point in reversed(self._btc_price_history):
+            if point.ts <= target_ts:
+                return point.price
+        return self._btc_price_history[0].price if self._btc_price_history else None
+
+    def _iy2_roi_pair(self, snapshot: BookSnapshot) -> tuple[float, float]:
+        total = snapshot.total_spend
+        if total <= 0:
+            return 0.0, 0.0
+        return snapshot.up_pnl_if_win / total, snapshot.down_pnl_if_win / total
+
+    def _iy2_shares_for_notional(self, notional: float, ref_price: float) -> tuple[int, int]:
+        lot = max(1, self.config.shares_per_level)
+        safe_price = max(0.01, round(ref_price, 2))
+        raw_shares = max(
+            self._minimum_order_shares(safe_price),
+            int(math.ceil(max(notional, MIN_MARKETABLE_BUY_NOTIONAL) / safe_price)),
+        )
+        rounded = int(math.ceil(raw_shares / lot) * lot)
+        return rounded, max(lot, self._minimum_order_shares(safe_price))
+
+    def _iy2_queue_candidate(
+        self,
+        queue: deque[OrderCandidate],
+        side_label: str,
+        notional: float,
+        reason: str,
+        *,
+        kind: str = "primary",
+    ) -> bool:
+        ref = self._side_price(side_label)
+        if ref <= 0:
+            return False
+        shares, min_shares = self._iy2_shares_for_notional(notional, ref)
+        queue.append(
+            OrderCandidate(
+                side_label=side_label,
+                kind=kind,
+                reference_price=ref,
+                limit_ceiling=min(0.99, round(ref + 0.05, 2)),
+                reason=reason,
+                shares=shares,
+                min_shares=min_shares,
+            )
+        )
+        return True
+
+    def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
+        self._no_signal_reason = ""
+        if not self._strategy_mode_iy2():
+            return
+        up_price = self._last_up_price or 0.0
+        down_price = self._last_down_price or 0.0
+        if up_price <= 0 or down_price <= 0:
+            self._no_signal_reason = "iy2: waiting for both side prices"
+            return
+        if seconds_remaining <= self.config.strategy_new_order_cutoff_seconds:
+            self._no_signal_reason = "iy2: past new-order cutoff"
+            return
+
+        p = self._iy2_params
+        queue: deque[OrderCandidate] = deque()
+        local_up_shares = float(snapshot.up_shares)
+        local_down_shares = float(snapshot.down_shares)
+        local_up_cost = float(snapshot.up_spend)
+        local_down_cost = float(snapshot.down_spend)
+
+        def current_rois() -> tuple[float, float]:
+            total = local_up_cost + local_down_cost
+            if total <= 0:
+                return 0.0, 0.0
+            return (local_up_shares / total) - 1.0, (local_down_shares / total) - 1.0
+
+        def apply_virtual_buy(side_label: str, notional: float) -> bool:
+            nonlocal local_up_shares, local_down_shares, local_up_cost, local_down_cost
+            ref = self._side_price(side_label)
+            if ref <= 0:
+                return False
+            shares, _ = self._iy2_shares_for_notional(notional, ref)
+            actual_cost = shares * ref
+            if side_label == "UP":
+                local_up_shares += shares
+                local_up_cost += actual_cost
+            else:
+                local_down_shares += shares
+                local_down_cost += actual_cost
+            return True
+
+        pair_sum = up_price + down_price
+        spread = abs(up_price - down_price)
+        current_winner = "UP" if up_price >= down_price else "DOWN"
+        current_loser = "DOWN" if current_winner == "UP" else "UP"
+        win_px = up_price if current_winner == "UP" else down_price
+        lose_px = down_price if current_winner == "UP" else up_price
+
+        prev30_btc = self._iy2_btc_price_lookback(30) or self._window_open_btc_price or 0.0
+        prev90_btc = self._iy2_btc_price_lookback(90) or prev30_btc
+        btc_now = self._last_btc_price or 0.0
+        btc_move30 = btc_now - prev30_btc if btc_now > 0 and prev30_btc > 0 else 0.0
+        btc_move90 = btc_now - prev90_btc if btc_now > 0 and prev90_btc > 0 else 0.0
+        prev30_win = self._iy2_price_lookback(current_winner, 30) or win_px
+        prev90_lose = self._iy2_price_lookback(current_loser, 90) or lose_px
+        winner_move30 = win_px - prev30_win
+        loser_move90 = lose_px - prev90_lose
+
+        up_roi, down_roi = current_rois()
+        positive_book = (local_up_cost + local_down_cost) > 0 and up_roi > 0 and down_roi > 0
+        protected = (local_up_cost + local_down_cost) > 0 and up_roi >= 0.02 and down_roi >= 0.02
+
+        if (
+            elapsed <= p["base_end"]
+            and pair_sum >= p["pair_min"]
+            and pair_sum <= p["pair_max"]
+            and spread <= p["base_spread_max"]
+            and elapsed - self._iy2_last_base_elapsed >= p["base_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, "UP", p["base_notional"], "iy2|base|side=UP") and self._iy2_queue_candidate(queue, "DOWN", p["base_notional"], "iy2|base|side=DOWN"):
+                apply_virtual_buy("UP", p["base_notional"])
+                apply_virtual_buy("DOWN", p["base_notional"])
+                self._iy2_last_base_elapsed = elapsed
+
+        btc_align_up = btc_move30 >= p["btc_move30_min"] and btc_move90 >= p["btc_move90_min"]
+        btc_align_down = btc_move30 <= -p["btc_move30_min"] and btc_move90 <= -p["btc_move90_min"]
+        btc_aligned = (current_winner == "UP" and btc_align_up) or (current_winner == "DOWN" and btc_align_down)
+
+        if (
+            spread >= p["winner_spread_min"]
+            and win_px >= p["winner_price_min"]
+            and win_px <= p["winner_price_max"]
+            and winner_move30 >= p["winner_move30_min"]
+            and btc_aligned
+            and not positive_book
+            and not protected
+            and elapsed - self._iy2_last_winner_elapsed >= p["winner_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, current_winner, p["winner_notional"], f"iy2|winner|side={current_winner}"):
+                apply_virtual_buy(current_winner, p["winner_notional"])
+                self._iy2_last_winner_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        losing_outcome = "UP" if up_roi < down_roi else "DOWN"
+        losing_roi = up_roi if losing_outcome == "UP" else down_roi
+        if (
+            lose_px <= p["hedge_price_max"]
+            and spread >= p["hedge_spread_min"]
+            and loser_move90 <= p["loser_move90_max"]
+            and losing_roi <= p["hedge_need_roi_max"]
+            and not positive_book
+            and not protected
+            and elapsed - self._iy2_last_hedge_elapsed >= p["hedge_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, current_loser, p["hedge_notional"], f"iy2|hedge|side={current_loser}"):
+                apply_virtual_buy(current_loser, p["hedge_notional"])
+                self._iy2_last_hedge_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        losing_outcome = "UP" if up_roi < down_roi else "DOWN"
+        losing_roi = up_roi if losing_outcome == "UP" else down_roi
+        losing_px = up_price if losing_outcome == "UP" else down_price
+        if (
+            elapsed >= p["repair_start"]
+            and losing_roi <= p["repair_need_roi_max"]
+            and losing_px <= p["repair_price_max"]
+            and spread >= p["repair_spread_min"]
+            and not positive_book
+            and not protected
+            and elapsed - self._iy2_last_repair_elapsed >= p["repair_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, losing_outcome, p["repair_notional"], f"iy2|repair|side={losing_outcome}"):
+                apply_virtual_buy(losing_outcome, p["repair_notional"])
+                self._iy2_last_repair_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        if (
+            elapsed >= p["late_start"]
+            and min(up_roi, down_roi) >= p["late_both_roi_min"]
+            and spread >= p["late_spread_min"]
+            and win_px >= p["late_winner_price_min"]
+            and not positive_book
+            and not protected
+            and elapsed - self._iy2_last_late_elapsed >= p["late_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, current_winner, p["late_notional"], f"iy2|late|side={current_winner}"):
+                apply_virtual_buy(current_winner, p["late_notional"])
+                self._iy2_last_late_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        if (
+            elapsed >= p["maintenance_start"]
+            and min(up_roi, down_roi) >= p["maintenance_roi_min"]
+            and max(up_roi, down_roi) <= p["maintenance_roi_max"]
+            and pair_sum >= p["maintenance_pair_min"]
+            and pair_sum <= p["maintenance_pair_max"]
+            and spread >= p["maintenance_spread_min"]
+            and spread <= p["maintenance_spread_max"]
+            and elapsed - self._iy2_last_maint_elapsed >= p["maintenance_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, "UP", p["maintenance_notional"], "iy2|maintenance|side=UP") and self._iy2_queue_candidate(queue, "DOWN", p["maintenance_notional"], "iy2|maintenance|side=DOWN"):
+                apply_virtual_buy("UP", p["maintenance_notional"])
+                apply_virtual_buy("DOWN", p["maintenance_notional"])
+                self._iy2_last_maint_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        broken_side = ""
+        broken_roi = 0.0
+        if (local_up_cost + local_down_cost) > 0 and (up_roi < 0.02 or down_roi < 0.02):
+            broken_side = "UP" if up_roi < down_roi else "DOWN"
+            broken_roi = up_roi if broken_side == "UP" else down_roi
+        broken_px = up_price if broken_side == "UP" else down_price if broken_side else 0.0
+        if (
+            broken_side
+            and elapsed >= p["rebalance_start"]
+            and broken_roi <= p["rebalance_need_roi_max"]
+            and broken_px <= p["rebalance_price_max"]
+            and spread >= p["rebalance_spread_min"]
+            and elapsed - self._iy2_last_rebalance_elapsed >= p["rebalance_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, broken_side, p["rebalance_notional"], f"iy2|rebalance|side={broken_side}"):
+                apply_virtual_buy(broken_side, p["rebalance_notional"])
+                self._iy2_last_rebalance_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        weak_side = "UP" if up_roi < down_roi else "DOWN"
+        weak_roi = up_roi if weak_side == "UP" else down_roi
+        strong_roi = down_roi if weak_side == "UP" else up_roi
+        weak_px = up_price if weak_side == "UP" else down_price
+        if (
+            elapsed >= p["safety_start"]
+            and weak_px <= p["safety_price_max"]
+            and weak_roi <= p["safety_weak_roi_max"]
+            and strong_roi >= p["safety_strong_roi_min"]
+            and spread >= p["safety_spread_min"]
+            and elapsed - self._iy2_last_safety_elapsed >= p["safety_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, weak_side, p["safety_notional"], f"iy2|safety|side={weak_side}"):
+                apply_virtual_buy(weak_side, p["safety_notional"])
+                self._iy2_last_safety_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        cheap_side = "UP" if up_price <= down_price else "DOWN"
+        cheap_px = up_price if cheap_side == "UP" else down_price
+        rich_roi = down_roi if cheap_side == "UP" else up_roi
+        cheap_roi = up_roi if cheap_side == "UP" else down_roi
+        if (
+            elapsed >= p["value_start"]
+            and cheap_px <= p["value_price_max"]
+            and spread >= p["value_spread_min"]
+            and cheap_roi <= p["value_cheap_roi_max"]
+            and rich_roi >= p["value_rich_roi_min"]
+            and elapsed - self._iy2_last_value_elapsed >= p["value_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, cheap_side, p["value_notional"], f"iy2|value|side={cheap_side}"):
+                apply_virtual_buy(cheap_side, p["value_notional"])
+                self._iy2_last_value_elapsed = elapsed
+
+        up_roi, down_roi = current_rois()
+        cheap_side = "UP" if up_price <= down_price else "DOWN"
+        cheap_px = up_price if cheap_side == "UP" else down_price
+        rich_roi = down_roi if cheap_side == "UP" else up_roi
+        if (
+            elapsed >= p["deep_start"]
+            and cheap_px <= p["deep_price_max"]
+            and spread >= p["deep_spread_min"]
+            and rich_roi >= p["deep_rich_roi_min"]
+            and elapsed - self._iy2_last_deep_elapsed >= p["deep_cooldown"]
+        ):
+            if self._iy2_queue_candidate(queue, cheap_side, p["deep_notional"], f"iy2|deep|side={cheap_side}"):
+                self._iy2_last_deep_elapsed = elapsed
+
+        self._iy2_action_queue.extend(queue)
+        if not self._iy2_action_queue and not self._no_signal_reason:
+            self._no_signal_reason = "iy2: no rule fired this tick"
 
     def _choose_aa1_candidate(
         self,
