@@ -1789,6 +1789,9 @@ class Btc15RedeemEngine:
             return
 
         if hold_release_active:
+            if seconds_remaining <= self.config.force_exit_before_end_seconds:
+                self._force_late_exit_cleanup(contract)
+                return
             for side_label in ("UP", "DOWN"):
                 self._ensure_exit_sell(
                     contract,
@@ -2123,13 +2126,16 @@ class Btc15RedeemEngine:
         token = contract.up if side_label == "UP" else contract.down
         balance = self.trader.token_balance(token.token_id)
         size = int(balance)
-        if size < 1:
+        min_exit_shares = 1 if purpose != "tp" else max(1, self.config.shares_per_level)
+        if size < min_exit_shares:
             LOGGER.info(
-                "[EXIT SKIP] %s | side=%s | purpose=%s | balance=%.4f < 1 share",
+                "[EXIT SKIP] %s | side=%s | purpose=%s | balance=%.4f < %d share%s",
                 contract.slug,
                 side_label,
                 purpose,
                 balance,
+                min_exit_shares,
+                "" if min_exit_shares == 1 else "s",
             )
             if balance < 1:
                 self._fully_exited_sides.add(side_label)
@@ -2162,9 +2168,10 @@ class Btc15RedeemEngine:
                 price,
             )
             return None
+        min_exit_shares = 1 if purpose != "tp" else max(1, self.config.shares_per_level)
         attempt_size = size
         attempts = 0
-        while attempt_size >= 1 and attempts < 8:
+        while attempt_size >= min_exit_shares and attempts < 8:
             attempts += 1
             try:
                 resp = self.trader.place_limit_sell(token, price, attempt_size)
@@ -2215,6 +2222,8 @@ class Btc15RedeemEngine:
                     return None
                 if next_size is None or next_size >= attempt_size:
                     next_size = attempt_size - 1
+                if next_size is not None and next_size < min_exit_shares:
+                    next_size = None
                 attempt_size = next_size
 
         LOGGER.warning(
@@ -3843,6 +3852,25 @@ class Btc15RedeemEngine:
         rounded = int(math.ceil(raw_shares / lot) * lot)
         return rounded, max(lot, self._minimum_order_shares(safe_price))
 
+    def _iy2_max_shares_for_reason(self, reason: str) -> int:
+        lot = max(1, self.config.shares_per_level)
+        caps = {
+            "base": 10,
+            "winner": 15,
+            "hedge": 10,
+            "repair": 10,
+            "late": 10,
+            "maintenance": 10,
+            "rebalance": 15,
+            "safety": 15,
+            "value": 10,
+            "deep": 15,
+        }
+        for key, cap in caps.items():
+            if f"|{key}|" in reason:
+                return max(lot, int(math.ceil(cap / lot) * lot))
+        return max(lot, 15)
+
     def _iy2_queue_candidate(
         self,
         queue: deque[OrderCandidate],
@@ -3856,6 +3884,10 @@ class Btc15RedeemEngine:
         if ref <= 0:
             return False
         shares, min_shares = self._iy2_shares_for_notional(notional, ref)
+        max_shares = self._iy2_max_shares_for_reason(reason)
+        if min_shares > max_shares:
+            return False
+        shares = min(shares, max_shares)
         queue.append(
             OrderCandidate(
                 side_label=side_label,
@@ -3888,6 +3920,8 @@ class Btc15RedeemEngine:
         local_down_shares = float(snapshot.down_shares)
         local_up_cost = float(snapshot.up_spend)
         local_down_cost = float(snapshot.down_spend)
+        book_live = (local_up_cost + local_down_cost) > 0
+        two_sided_live = local_up_shares > 0 and local_down_shares > 0
 
         def current_rois() -> tuple[float, float]:
             total = local_up_cost + local_down_cost
@@ -3928,8 +3962,15 @@ class Btc15RedeemEngine:
         loser_move90 = lose_px - prev90_lose
 
         up_roi, down_roi = current_rois()
-        positive_book = (local_up_cost + local_down_cost) > 0 and up_roi > 0 and down_roi > 0
-        protected = (local_up_cost + local_down_cost) > 0 and up_roi >= 0.02 and down_roi >= 0.02
+        positive_book = book_live and up_roi > 0 and down_roi > 0
+        protected = book_live and up_roi >= 0.02 and down_roi >= 0.02
+        weak_roi = min(up_roi, down_roi)
+        strong_roi = max(up_roi, down_roi)
+        total_shares = local_up_shares + local_down_shares
+        dominant_share_ratio = (max(local_up_shares, local_down_shares) / total_shares) if total_shares > 0 else 0.0
+        one_sided_live = book_live and not two_sided_live
+        needs_protection = book_live and weak_roi < 0.02
+        book_too_lopsided_to_press = book_live and dominant_share_ratio >= 0.64
 
         if (
             elapsed <= p["base_end"]
@@ -3955,6 +3996,10 @@ class Btc15RedeemEngine:
             and btc_aligned
             and not positive_book
             and not protected
+            and not one_sided_live
+            and not book_too_lopsided_to_press
+            and not needs_protection
+            and (book_live or elapsed <= max(float(p["base_end"]), 180.0))
             and elapsed - self._iy2_last_winner_elapsed >= p["winner_cooldown"]
         ):
             if self._iy2_queue_candidate(queue, current_winner, p["winner_notional"], f"iy2|winner|side={current_winner}"):
@@ -4011,12 +4056,16 @@ class Btc15RedeemEngine:
         up_roi, down_roi = current_rois()
         if (
             elapsed >= p["maintenance_start"]
+            and book_live
+            and two_sided_live
             and min(up_roi, down_roi) >= p["maintenance_roi_min"]
             and max(up_roi, down_roi) <= p["maintenance_roi_max"]
             and pair_sum >= p["maintenance_pair_min"]
             and pair_sum <= p["maintenance_pair_max"]
             and spread >= p["maintenance_spread_min"]
             and spread <= p["maintenance_spread_max"]
+            and dominant_share_ratio <= 0.58
+            and protected
             and elapsed - self._iy2_last_maint_elapsed >= p["maintenance_cooldown"]
         ):
             if self._iy2_queue_candidate(queue, "UP", p["maintenance_notional"], "iy2|maintenance|side=UP") and self._iy2_queue_candidate(queue, "DOWN", p["maintenance_notional"], "iy2|maintenance|side=DOWN"):
@@ -4050,6 +4099,7 @@ class Btc15RedeemEngine:
         weak_px = up_price if weak_side == "UP" else down_price
         if (
             elapsed >= p["safety_start"]
+            and book_live
             and weak_px <= p["safety_price_max"]
             and weak_roi <= p["safety_weak_roi_max"]
             and strong_roi >= p["safety_strong_roi_min"]
@@ -4067,6 +4117,7 @@ class Btc15RedeemEngine:
         cheap_roi = up_roi if cheap_side == "UP" else down_roi
         if (
             elapsed >= p["value_start"]
+            and book_live
             and cheap_px <= p["value_price_max"]
             and spread >= p["value_spread_min"]
             and cheap_roi <= p["value_cheap_roi_max"]
@@ -4083,6 +4134,7 @@ class Btc15RedeemEngine:
         rich_roi = down_roi if cheap_side == "UP" else up_roi
         if (
             elapsed >= p["deep_start"]
+            and book_live
             and cheap_px <= p["deep_price_max"]
             and spread >= p["deep_spread_min"]
             and rich_roi >= p["deep_rich_roi_min"]
