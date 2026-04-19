@@ -621,6 +621,7 @@ class Btc15RedeemEngine:
         self._iy2_base_locked = False
         self._iy2_last_fill_elapsed: dict[str, float] = {"UP": -10_000.0, "DOWN": -10_000.0}
         self._iy2_last_fill_price: dict[str, float | None] = {"UP": None, "DOWN": None}
+        self._iy2_last_filled_side: str | None = None
         if self.config.strategy_mode == "iy2":
             loaded = _load_best_params_json(IY2_PARAMS_JSON)
             if loaded:
@@ -1054,6 +1055,7 @@ class Btc15RedeemEngine:
         self._iy2_base_locked = False
         self._iy2_last_fill_elapsed = {"UP": -10_000.0, "DOWN": -10_000.0}
         self._iy2_last_fill_price = {"UP": None, "DOWN": None}
+        self._iy2_last_filled_side = None
 
         self._box_lot_counts = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed = {"UP": None, "DOWN": None}
@@ -1483,6 +1485,7 @@ class Btc15RedeemEngine:
         elif order.reason.startswith("iy2|"):
             self._iy2_last_fill_elapsed[order.side_label] = self._current_elapsed
             self._iy2_last_fill_price[order.side_label] = float(order.price)
+            self._iy2_last_filled_side = order.side_label
             if self._up_shares > 0 and self._down_shares > 0:
                 self._iy2_base_locked = True
         elif order.reason.startswith("aa1_balance|"):
@@ -4020,6 +4023,17 @@ class Btc15RedeemEngine:
         risk_gap = max(0.0, freeze_roi - up_roi) + max(0.0, freeze_roi - down_roi)
         return 1.5 * size_gap + 1.1 * notional_gap + 0.9 * avg_gap + 0.8 * ratio_gap + 0.35 * risk_gap
 
+    @staticmethod
+    def _iy2_dominant_side(up_shares: float, down_shares: float) -> str:
+        if up_shares == down_shares:
+            return "UP"
+        return "UP" if up_shares > down_shares else "DOWN"
+
+    @staticmethod
+    def _iy2_dominant_ratio(up_shares: float, down_shares: float) -> float:
+        total = up_shares + down_shares
+        return max(up_shares, down_shares) / total if total > 0 else 0.5
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -4048,6 +4062,8 @@ class Btc15RedeemEngine:
             self.config.shares_per_level,
             int(math.ceil(float(p.get("candidate_share_cap", 25) or 25) / max(1, self.config.shares_per_level)) * max(1, self.config.shares_per_level)),
         )
+        dominant_ratio_soft = float(p.get("dominant_ratio_soft", 0.62) or 0.62)
+        dominant_ratio_hard = float(p.get("dominant_ratio_hard", 0.68) or 0.68)
         budget_cap = max(1.0, float(self._window_budget_usdc or self.config.strategy_budget_cap_usdc))
         total_cost = local_up_cost + local_down_cost
         up_roi = (local_up_shares / total_cost) - 1.0 if total_cost > 0 else 0.0
@@ -4068,9 +4084,14 @@ class Btc15RedeemEngine:
             freeze_roi,
         )
         current_min_roi = min(up_roi, down_roi) if total_cost > 0 else 0.0
-        best_candidate: tuple[float, str, int] | None = None
+        current_total_shares = local_up_shares + local_down_shares
+        current_dom_ratio = self._iy2_dominant_ratio(local_up_shares, local_down_shares) if current_total_shares > 0 else 0.5
+        current_dominant_side = self._iy2_dominant_side(local_up_shares, local_down_shares)
+        best_candidate: tuple[float, float, str, int] | None = None
 
         for side_label, ref in (("UP", up_price), ("DOWN", down_price)):
+            if self._iy2_last_filled_side == side_label:
+                continue
             if ref <= 0:
                 continue
             last_fill_elapsed = self._iy2_last_fill_elapsed.get(side_label, -10_000.0)
@@ -4096,6 +4117,9 @@ class Btc15RedeemEngine:
                 next_total_cost = next_up_cost + next_down_cost
                 next_up_roi = (next_up_shares / next_total_cost) - 1.0 if next_total_cost > 0 else 0.0
                 next_down_roi = (next_down_shares / next_total_cost) - 1.0 if next_total_cost > 0 else 0.0
+                next_total_shares = next_up_shares + next_down_shares
+                next_dom_ratio = self._iy2_dominant_ratio(next_up_shares, next_down_shares) if next_total_shares > 0 else 0.5
+                next_dominant_side = self._iy2_dominant_side(next_up_shares, next_down_shares)
                 next_distance = self._iy2_wallet_path_distance(
                     next_up_shares,
                     next_down_shares,
@@ -4109,17 +4133,40 @@ class Btc15RedeemEngine:
                 price_ok = target_avg <= 0 or ref <= (target_avg + cheap_buffer)
                 risk_improves = min(next_up_roi, next_down_roi) > (current_min_roi + 0.002)
                 target_catchup = notional_gap > 0.01
-                if improvement >= improvement_min and (price_ok or risk_improves or target_catchup):
-                    if best_candidate is None or improvement > best_candidate[0]:
-                        best_candidate = (improvement, side_label, shares)
+                worsens_floor = total_cost > 0 and min(next_up_roi, next_down_roi) < (current_min_roi - 0.003)
+                lopsided_worsens = (
+                    total_cost > 0
+                    and next_dom_ratio > dominant_ratio_soft
+                    and next_dom_ratio > current_dom_ratio + 0.01
+                    and next_dominant_side == side_label
+                )
+                dominant_chase = (
+                    total_cost > 0
+                    and side_label == current_dominant_side
+                    and current_dom_ratio >= 0.55
+                    and not risk_improves
+                    and not price_ok
+                )
+                side_missing = (side_label == "UP" and local_up_shares <= 0) or (side_label == "DOWN" and local_down_shares <= 0)
+                bootstrap_ok = (total_cost <= 0 and side_missing and target_catchup and price_ok) or (
+                    total_cost > 0 and current_total_shares > 0 and side_missing and target_catchup and price_ok
+                )
+                if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok:
+                    continue
+                if worsens_floor or lopsided_worsens or dominant_chase:
+                    continue
+                situation_gain = (min(next_up_roi, next_down_roi) - current_min_roi) - max(0.0, next_dom_ratio - current_dom_ratio)
+                if improvement >= improvement_min and (price_ok or risk_improves or target_catchup or bootstrap_ok):
+                    if best_candidate is None or (situation_gain, improvement) > (best_candidate[0], best_candidate[1]):
+                        best_candidate = (situation_gain, improvement, side_label, shares)
 
         if best_candidate is None:
             self._no_signal_reason = "iy2: no wallet-path improvement buy this tick"
             return
 
-        improvement, side_label, shares = best_candidate
+        _, _, side_label, shares = best_candidate
         ref = self._side_price(side_label)
-        reason = f"iy2|wallet_path|side={side_label}|bucket={target['bucket_label']}|imp={improvement:.4f}"
+        reason = f"iy2|wallet_path|side={side_label}|bucket={target['bucket_label']}|alt=1"
         queue.append(
             OrderCandidate(
                 side_label=side_label,
@@ -4129,6 +4176,7 @@ class Btc15RedeemEngine:
                 reason=reason,
                 shares=shares,
                 min_shares=shares,
+                execution_style="taker_best_ask",
             )
         )
         self._iy2_action_queue.extend(queue)
@@ -4310,7 +4358,7 @@ class Btc15RedeemEngine:
             return True
 
         try:
-            if order_type == "taker":
+            if order_type == "taker" and not self._strategy_mode_iy2():
                 resp: dict[str, Any] | None = None
                 last_taker_exc: BaseException | None = None
                 for fak_attempt in range(2):
@@ -4356,6 +4404,13 @@ class Btc15RedeemEngine:
                         raise
                 if resp is None:
                     raise last_taker_exc if last_taker_exc else RuntimeError("FAK buy returned no response")
+            elif order_type == "taker":
+                resp = self.trader.place_marketable_buy(
+                    token,
+                    limit_price,
+                    shares,
+                    fee_rate_bps=candidate.fee_rate_bps,
+                )
             else:
                 resp = self.trader.place_limit_buy(
                     token,
