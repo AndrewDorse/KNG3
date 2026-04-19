@@ -606,6 +606,9 @@ class Btc15RedeemEngine:
         self._iy2_last_safety_elapsed = -10_000.0
         self._iy2_last_value_elapsed = -10_000.0
         self._iy2_last_deep_elapsed = -10_000.0
+        self._iy2_base_locked = False
+        self._iy2_last_fill_elapsed: dict[str, float] = {"UP": -10_000.0, "DOWN": -10_000.0}
+        self._iy2_last_fill_price: dict[str, float | None] = {"UP": None, "DOWN": None}
         if self.config.strategy_mode == "iy2":
             loaded = _load_best_params_json(IY2_PARAMS_JSON)
             if loaded:
@@ -1024,6 +1027,21 @@ class Btc15RedeemEngine:
         self._mimic_last_lottery_elapsed = -10_000.0
         self._mimic_prev_winner = None
         self._mimic_consecutive_same_winner = 0
+
+        self._iy2_action_queue.clear()
+        self._iy2_last_base_elapsed = -10_000.0
+        self._iy2_last_winner_elapsed = -10_000.0
+        self._iy2_last_hedge_elapsed = -10_000.0
+        self._iy2_last_repair_elapsed = -10_000.0
+        self._iy2_last_late_elapsed = -10_000.0
+        self._iy2_last_maint_elapsed = -10_000.0
+        self._iy2_last_rebalance_elapsed = -10_000.0
+        self._iy2_last_safety_elapsed = -10_000.0
+        self._iy2_last_value_elapsed = -10_000.0
+        self._iy2_last_deep_elapsed = -10_000.0
+        self._iy2_base_locked = False
+        self._iy2_last_fill_elapsed = {"UP": -10_000.0, "DOWN": -10_000.0}
+        self._iy2_last_fill_price = {"UP": None, "DOWN": None}
 
         self._box_lot_counts = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed = {"UP": None, "DOWN": None}
@@ -1454,6 +1472,11 @@ class Btc15RedeemEngine:
             self._down_spend += notional
         if order.reason == "aa1_buy_cheap":
             self._aa1_record_cheap_fill(order.side_label, order.price, self._current_elapsed)
+        elif order.reason.startswith("iy2|"):
+            self._iy2_last_fill_elapsed[order.side_label] = self._current_elapsed
+            self._iy2_last_fill_price[order.side_label] = float(order.price)
+            if self._up_shares > 0 and self._down_shares > 0:
+                self._iy2_base_locked = True
         elif order.reason.startswith("aa1_balance|"):
             self._aa1_mark_balance_fill(order.reason)
         elif (
@@ -2591,12 +2614,17 @@ class Btc15RedeemEngine:
         rounds = len(queue)
         if rounds <= 0:
             return snapshot
+        placed_any = False
         for _ in range(rounds):
             candidate = queue.popleft()
+            if placed_any and self._strategy_mode_iy2():
+                queue.appendleft(candidate)
+                break
             open_orders = self._get_contract_orders(contract)
             if self._can_place_candidate(snapshot, candidate, open_orders, elapsed):
                 if self._place_candidate(contract, candidate, snapshot, elapsed):
                     snapshot = self._build_snapshot()
+                    placed_any = True
                     continue
             queue.append(candidate)
         return snapshot
@@ -3883,6 +3911,14 @@ class Btc15RedeemEngine:
         ref = self._side_price(side_label)
         if ref <= 0:
             return False
+        last_fill_elapsed = self._iy2_last_fill_elapsed.get(side_label, -10_000.0)
+        last_fill_price = self._iy2_last_fill_price.get(side_label)
+        if (
+            last_fill_price is not None
+            and (self._current_elapsed - last_fill_elapsed) <= 120.0
+            and abs(ref - last_fill_price) <= 0.03
+        ):
+            return False
         shares, min_shares = self._iy2_shares_for_notional(notional, ref)
         max_shares = self._iy2_max_shares_for_reason(reason)
         if min_shares > max_shares:
@@ -3971,18 +4007,31 @@ class Btc15RedeemEngine:
         one_sided_live = book_live and not two_sided_live
         needs_protection = book_live and weak_roi < 0.02
         book_too_lopsided_to_press = book_live and dominant_share_ratio >= 0.64
+        good_pair = snapshot.pair_avg_sum > 0 and snapshot.pair_avg_sum <= 1.01
+        if protected and good_pair:
+            self._iy2_base_locked = True
+            self._no_signal_reason = "iy2: protected balanced book frozen"
+            return
 
         if (
             elapsed <= p["base_end"]
+            and not self._iy2_base_locked
             and pair_sum >= p["pair_min"]
             and pair_sum <= p["pair_max"]
             and spread <= p["base_spread_max"]
             and elapsed - self._iy2_last_base_elapsed >= p["base_cooldown"]
         ):
-            if self._iy2_queue_candidate(queue, "UP", p["base_notional"], "iy2|base|side=UP") and self._iy2_queue_candidate(queue, "DOWN", p["base_notional"], "iy2|base|side=DOWN"):
+            queued_any = False
+            if local_up_shares <= 0 and self._iy2_queue_candidate(queue, "UP", p["base_notional"], "iy2|base|side=UP"):
                 apply_virtual_buy("UP", p["base_notional"])
+                queued_any = True
+            if local_down_shares <= 0 and self._iy2_queue_candidate(queue, "DOWN", p["base_notional"], "iy2|base|side=DOWN"):
                 apply_virtual_buy("DOWN", p["base_notional"])
+                queued_any = True
+            if queued_any:
                 self._iy2_last_base_elapsed = elapsed
+                if local_up_shares > 0 and local_down_shares > 0:
+                    self._iy2_base_locked = True
 
         btc_align_up = btc_move30 >= p["btc_move30_min"] and btc_move90 >= p["btc_move90_min"]
         btc_align_down = btc_move30 <= -p["btc_move30_min"] and btc_move90 <= -p["btc_move90_min"]
@@ -4016,6 +4065,7 @@ class Btc15RedeemEngine:
             and losing_roi <= p["hedge_need_roi_max"]
             and not positive_book
             and not protected
+            and not one_sided_live
             and elapsed - self._iy2_last_hedge_elapsed >= p["hedge_cooldown"]
         ):
             if self._iy2_queue_candidate(queue, current_loser, p["hedge_notional"], f"iy2|hedge|side={current_loser}"):
@@ -4033,6 +4083,7 @@ class Btc15RedeemEngine:
             and spread >= p["repair_spread_min"]
             and not positive_book
             and not protected
+            and not one_sided_live
             and elapsed - self._iy2_last_repair_elapsed >= p["repair_cooldown"]
         ):
             if self._iy2_queue_candidate(queue, losing_outcome, p["repair_notional"], f"iy2|repair|side={losing_outcome}"):
@@ -4207,6 +4258,10 @@ class Btc15RedeemEngine:
         open_orders: list[dict[str, Any]],
         elapsed: float,
     ) -> bool:
+        if self._strategy_mode_iy2() and self._order_map:
+            self._no_signal_reason = "iy2 waiting for prior buy order resolution"
+            return False
+
         if time.time() - self._last_order_time < self.config.order_cooldown_seconds:
             self._no_signal_reason = "order cooldown active"
             return False
@@ -4537,11 +4592,17 @@ class Btc15RedeemEngine:
         remaining_budget = min(self._phase_cap_usdc(elapsed), self._window_budget_usdc) - committed
         if remaining_budget <= 0:
             return 0
+        lot = max(1, self.config.shares_per_level)
         affordable_shares = int((remaining_budget + 1e-9) // estimated_limit)
+        affordable_shares = int(affordable_shares // lot) * lot
         if affordable_shares < required_min_shares:
             return 0
-        desired_shares = min(max(1, requested_shares), affordable_shares)
-        return max(required_min_shares, desired_shares)
+        desired_shares = min(max(lot, requested_shares), affordable_shares)
+        desired_shares = int(math.ceil(desired_shares / lot) * lot)
+        desired_shares = min(desired_shares, affordable_shares)
+        if desired_shares < required_min_shares:
+            return 0
+        return desired_shares
 
     def _effective_budget(self, wallet_balance_usdc: float) -> float:
         if self.config.dry_run and wallet_balance_usdc <= 0:
