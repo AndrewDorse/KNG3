@@ -623,6 +623,7 @@ class Btc15RedeemEngine:
         self._iy2_last_fill_elapsed: dict[str, float] = {"UP": -10_000.0, "DOWN": -10_000.0}
         self._iy2_last_fill_price: dict[str, float | None] = {"UP": None, "DOWN": None}
         self._iy2_last_filled_side: str | None = None
+        self._iy2_last_fail_elapsed: dict[str, float] = {"UP": -10_000.0, "DOWN": -10_000.0}
         if self.config.strategy_mode == "iy2":
             loaded = _load_best_params_json(IY2_PARAMS_JSON)
             if loaded:
@@ -1057,6 +1058,7 @@ class Btc15RedeemEngine:
         self._iy2_last_fill_elapsed = {"UP": -10_000.0, "DOWN": -10_000.0}
         self._iy2_last_fill_price = {"UP": None, "DOWN": None}
         self._iy2_last_filled_side = None
+        self._iy2_last_fail_elapsed = {"UP": -10_000.0, "DOWN": -10_000.0}
 
         self._box_lot_counts = {"UP": 0, "DOWN": 0}
         self._box_last_side_elapsed = {"UP": None, "DOWN": None}
@@ -4044,6 +4046,27 @@ class Btc15RedeemEngine:
             return "UP"
         return None
 
+    def _iy2_projected_worst_roi(
+        self,
+        up_shares: float,
+        down_shares: float,
+        up_cost: float,
+        down_cost: float,
+        side_label: str,
+        fill_price: float,
+        shares: int,
+    ) -> float:
+        next_up_shares = up_shares + (shares if side_label == "UP" else 0.0)
+        next_down_shares = down_shares + (shares if side_label == "DOWN" else 0.0)
+        next_up_cost = up_cost + (fill_price * shares if side_label == "UP" else 0.0)
+        next_down_cost = down_cost + (fill_price * shares if side_label == "DOWN" else 0.0)
+        next_total_cost = next_up_cost + next_down_cost
+        if next_total_cost <= 0:
+            return 0.0
+        up_roi = (next_up_shares / next_total_cost) - 1.0
+        down_roi = (next_down_shares / next_total_cost) - 1.0
+        return min(up_roi, down_roi)
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -4058,6 +4081,7 @@ class Btc15RedeemEngine:
             return
 
         p = self._iy2_params
+        fail_cooldown = float(p.get("fail_cooldown_seconds", 8.0) or 8.0)
         queue: deque[OrderCandidate] = deque()
         local_up_shares = float(snapshot.up_shares)
         local_down_shares = float(snapshot.down_shares)
@@ -4099,6 +4123,8 @@ class Btc15RedeemEngine:
 
         for side_label, ref in (("UP", up_price), ("DOWN", down_price)):
             if required_side is not None and side_label != required_side:
+                continue
+            if (elapsed - self._iy2_last_fail_elapsed.get(side_label, -10_000.0)) < fail_cooldown:
                 continue
             if self._iy2_last_filled_side == side_label:
                 continue
@@ -4163,6 +4189,8 @@ class Btc15RedeemEngine:
                 bootstrap_ok = (total_cost <= 0 and side_missing and target_catchup and price_ok) or (
                     total_cost > 0 and current_total_shares > 0 and side_missing and target_catchup and price_ok
                 )
+                if total_cost > 0 and not side_missing and min(next_up_roi, next_down_roi) <= current_min_roi + 1e-9:
+                    continue
                 if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok:
                     continue
                 if worsens_floor or lopsided_worsens or dominant_chase:
@@ -4256,6 +4284,11 @@ class Btc15RedeemEngine:
         if self._strategy_mode_iy2() and self._order_map:
             self._no_signal_reason = "iy2 waiting for prior buy order resolution"
             return False
+        if self._strategy_mode_iy2():
+            fail_cooldown = float(self._iy2_params.get("fail_cooldown_seconds", 8.0) or 8.0)
+            if (elapsed - self._iy2_last_fail_elapsed.get(candidate.side_label, -10_000.0)) < fail_cooldown:
+                self._no_signal_reason = f"iy2 fail cooldown active for {candidate.side_label}"
+                return False
 
         if time.time() - self._last_order_time < self.config.order_cooldown_seconds:
             self._no_signal_reason = "order cooldown active"
@@ -4342,10 +4375,35 @@ class Btc15RedeemEngine:
             if required_side is not None and candidate.side_label != required_side:
                 self._no_signal_reason = f"iy2 can only buy weaker side {required_side}"
                 return False
+            current_up_shares = float(self._up_shares)
+            current_down_shares = float(self._down_shares)
+            current_up_cost = float(self._up_spend)
+            current_down_cost = float(self._down_spend)
+            current_total_cost = current_up_cost + current_down_cost
+            current_worst_roi = (
+                min((current_up_shares / current_total_cost) - 1.0, (current_down_shares / current_total_cost) - 1.0)
+                if current_total_cost > 0
+                else 0.0
+            )
             next_up = snapshot.up_shares + (shares if candidate.side_label == "UP" else 0)
             next_down = snapshot.down_shares + (shares if candidate.side_label == "DOWN" else 0)
             if abs(next_up - next_down) > IY2_MAX_IMBALANCE_SHARES:
                 self._no_signal_reason = "iy2 projected imbalance exceeds 5 shares"
+                return False
+            side_missing = (candidate.side_label == "UP" and current_up_shares <= 0) or (
+                candidate.side_label == "DOWN" and current_down_shares <= 0
+            )
+            projected_worst_roi = self._iy2_projected_worst_roi(
+                current_up_shares,
+                current_down_shares,
+                current_up_cost,
+                current_down_cost,
+                candidate.side_label,
+                limit_price,
+                shares,
+            )
+            if current_total_cost > 0 and not side_missing and projected_worst_roi <= current_worst_roi + 1e-9:
+                self._no_signal_reason = "iy2 buy does not improve worst-case roi"
                 return False
 
         if self.config.dry_run:
@@ -4445,6 +4503,8 @@ class Btc15RedeemEngine:
                 )
             order_id = str(resp.get("orderID") or resp.get("id") or "")
         except Exception as exc:
+            if self._strategy_mode_iy2():
+                self._iy2_last_fail_elapsed[candidate.side_label] = elapsed
             self._no_signal_reason = f"order placement failed: {exc}"
             LOGGER.error(
                 "[ORDER FAILED] %s | kind=%s | side=%s | limit=$%.2f | %s",
