@@ -1989,8 +1989,7 @@ class Btc15RedeemEngine:
         for side_label, managed in list(self._exit_orders_by_side.items()):
             if managed.order_id in open_ids:
                 continue
-            token = contract.up if side_label == "UP" else contract.down
-            balance = self.trader.token_balance(token.token_id)
+            balance = self._safe_exit_position_shares(contract, side_label)
             if balance < 1:
                 self._fully_exited_sides.add(side_label)
                 LOGGER.info(
@@ -2050,8 +2049,7 @@ class Btc15RedeemEngine:
             age = now - managed.placed_at
             if age < EXIT_RECONCILE_INTERVAL_SECONDS:
                 continue
-            token = contract.up if side_label == "UP" else contract.down
-            live_balance = int(self.trader.token_balance(token.token_id))
+            live_balance = int(self._safe_exit_position_shares(contract, side_label))
             if managed.purpose == "scalp_tp":
                 desired_price = managed.price
             else:
@@ -2087,7 +2085,7 @@ class Btc15RedeemEngine:
         for side_label, token in (("UP", contract.up), ("DOWN", contract.down)):
             if side_label in self._fully_exited_sides:
                 continue
-            balance = self.trader.token_balance(token.token_id)
+            balance = self._safe_exit_position_shares(contract, side_label)
             if balance < 1:
                 continue
             active = self._exit_orders_by_side.get(side_label)
@@ -2159,7 +2157,7 @@ class Btc15RedeemEngine:
             return
 
         token = contract.up if side_label == "UP" else contract.down
-        balance = self.trader.token_balance(token.token_id)
+        balance = self._safe_exit_position_shares(contract, side_label)
         size = int(balance)
         min_exit_shares = 1 if purpose != "tp" else max(1, self.config.shares_per_level)
         if size < min_exit_shares:
@@ -4035,6 +4033,17 @@ class Btc15RedeemEngine:
         total = up_shares + down_shares
         return max(up_shares, down_shares) / total if total > 0 else 0.5
 
+    def _iy2_required_repair_side(self, up_shares: float, down_shares: float) -> str | None:
+        if up_shares > 0 and down_shares <= 0:
+            return "DOWN"
+        if down_shares > 0 and up_shares <= 0:
+            return "UP"
+        if up_shares > down_shares:
+            return "DOWN"
+        if down_shares > up_shares:
+            return "UP"
+        return None
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -4086,8 +4095,11 @@ class Btc15RedeemEngine:
         current_dom_ratio = self._iy2_dominant_ratio(local_up_shares, local_down_shares) if current_total_shares > 0 else 0.5
         current_dominant_side = self._iy2_dominant_side(local_up_shares, local_down_shares)
         best_candidate: tuple[float, float, str, int] | None = None
+        required_side = self._iy2_required_repair_side(local_up_shares, local_down_shares)
 
         for side_label, ref in (("UP", up_price), ("DOWN", down_price)):
+            if required_side is not None and side_label != required_side:
+                continue
             if self._iy2_last_filled_side == side_label:
                 continue
             if ref <= 0:
@@ -4326,6 +4338,10 @@ class Btc15RedeemEngine:
 
         projection = self._project_book(snapshot, candidate.side_label, limit_price, shares)
         if self._strategy_mode_iy2():
+            required_side = self._iy2_required_repair_side(float(snapshot.up_shares), float(snapshot.down_shares))
+            if required_side is not None and candidate.side_label != required_side:
+                self._no_signal_reason = f"iy2 can only buy weaker side {required_side}"
+                return False
             next_up = snapshot.up_shares + (shares if candidate.side_label == "UP" else 0)
             next_down = snapshot.down_shares + (shares if candidate.side_label == "DOWN" else 0)
             if abs(next_up - next_down) > IY2_MAX_IMBALANCE_SHARES:
@@ -4661,6 +4677,22 @@ class Btc15RedeemEngine:
                 return
         self._order_map.pop(order_id, None)
         self._cancels += 1
+
+    def _tracked_side_shares(self, side_label: str) -> float:
+        return float(self._up_shares if side_label == "UP" else self._down_shares)
+
+    def _safe_exit_position_shares(self, contract: ActiveContract, side_label: str) -> float:
+        token = contract.up if side_label == "UP" else contract.down
+        baseline = self._baseline_up_balance if side_label == "UP" else self._baseline_down_balance
+        tracked = max(0.0, self._tracked_side_shares(side_label))
+        delta = max(0.0, float(self._token_delta(token, baseline)))
+        if tracked <= 0.0:
+            return delta
+        # Some venue/API balance reads can come back in a scaled/raw unit and massively exceed
+        # the actual window inventory. Exit sizing must never trust that larger number.
+        if delta <= 0.0 or delta > max(tracked + 5.0, tracked * 2.0):
+            return tracked
+        return min(tracked, delta)
 
     def _token_delta(self, token: TokenMarket, baseline: float) -> float:
         return round(self.trader.token_balance(token.token_id) - baseline, 4)
