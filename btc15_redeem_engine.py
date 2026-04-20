@@ -34,6 +34,7 @@ STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
 STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"
 MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
 IY2_STRATEGY_PROFILE_ID = "IY2_wallet_overlap_v1"
+IY2_MAX_IMBALANCE_SHARES = 5
 WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
 VOLUME_T10_HYBRID_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_hybrid_v2"
@@ -4058,10 +4059,7 @@ class Btc15RedeemEngine:
         cheap_buffer = float(p.get("cheap_buffer", 0.03) or 0.03)
         dedupe_seconds = float(p.get("same_side_dedupe_seconds", 30.0) or 30.0)
         dedupe_band = float(p.get("same_side_dedupe_price_band", 0.02) or 0.02)
-        candidate_share_cap = max(
-            self.config.shares_per_level,
-            int(math.ceil(float(p.get("candidate_share_cap", 25) or 25) / max(1, self.config.shares_per_level)) * max(1, self.config.shares_per_level)),
-        )
+        candidate_share_cap = max(1, self.config.shares_per_level)
         dominant_ratio_soft = float(p.get("dominant_ratio_soft", 0.62) or 0.62)
         dominant_ratio_hard = float(p.get("dominant_ratio_hard", 0.68) or 0.68)
         budget_cap = max(1.0, float(self._window_budget_usdc or self.config.strategy_budget_cap_usdc))
@@ -4120,6 +4118,8 @@ class Btc15RedeemEngine:
                 next_total_shares = next_up_shares + next_down_shares
                 next_dom_ratio = self._iy2_dominant_ratio(next_up_shares, next_down_shares) if next_total_shares > 0 else 0.5
                 next_dominant_side = self._iy2_dominant_side(next_up_shares, next_down_shares)
+                if abs(next_up_shares - next_down_shares) > IY2_MAX_IMBALANCE_SHARES:
+                    continue
                 next_distance = self._iy2_wallet_path_distance(
                     next_up_shares,
                     next_down_shares,
@@ -4269,6 +4269,8 @@ class Btc15RedeemEngine:
             elapsed,
             min_shares=candidate.min_shares,
         )
+        if self._strategy_mode_iy2():
+            scaled_shares = min(scaled_shares, max(1, self.config.shares_per_level))
         if scaled_shares <= 0:
             self._no_signal_reason = "insufficient remaining budget for venue-min order"
             return False
@@ -4323,6 +4325,12 @@ class Btc15RedeemEngine:
             return False
 
         projection = self._project_book(snapshot, candidate.side_label, limit_price, shares)
+        if self._strategy_mode_iy2():
+            next_up = snapshot.up_shares + (shares if candidate.side_label == "UP" else 0)
+            next_down = snapshot.down_shares + (shares if candidate.side_label == "DOWN" else 0)
+            if abs(next_up - next_down) > IY2_MAX_IMBALANCE_SHARES:
+                self._no_signal_reason = "iy2 projected imbalance exceeds 5 shares"
+                return False
 
         if self.config.dry_run:
             order_id = "dry_%d_%s" % (int(time.time() * 1000), candidate.side_label.lower())
