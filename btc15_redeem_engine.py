@@ -4216,7 +4216,7 @@ class Btc15RedeemEngine:
                 reason=reason,
                 shares=shares,
                 min_shares=shares,
-                execution_style="taker_best_ask",
+                execution_style="normal",
             )
         )
         self._iy2_action_queue.extend(queue)
@@ -4618,6 +4618,13 @@ class Btc15RedeemEngine:
                 return None, "maker"
             maker_price = round(max(0.01, min(limit_ceiling, best_bid)), 2)
             return maker_price, "maker"
+        if self._strategy_mode_iy2() and execution_style == "taker_best_ask":
+            return self._resolve_limit_price(
+                token,
+                reference_price,
+                limit_ceiling,
+                post_only=False,
+            ), "maker"
         if execution_style == "taker_best_ask":
             best_ask = self.trader.get_best_ask(token.token_id)
             if best_ask is not None and best_ask > 0:
