@@ -59,6 +59,13 @@ def main() -> int:
             config.paladin_dynamic_clip_cap,
             config.paladin_cooldown_seconds,
         )
+        LOGGER.info(
+            "paladin_disc  = tighten_pf=%.4f sum_floor=%.2f imb_bypass_sh=%s relax_after_force_s=%s",
+            config.paladin_pair_sum_tighten_per_fill,
+            config.paladin_pair_sum_min_floor,
+            config.paladin_pending_hedge_bypass_imbalance_shares,
+            config.paladin_discipline_relax_after_forced_sec,
+        )
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)
     LOGGER.info("budget cap   = $%.2f", config.strategy_budget_cap_usdc)

@@ -29,11 +29,13 @@ from trader import PolymarketTrader
 _REPO_ROOT = Path(__file__).resolve().parent
 MIMIC_PARAMS_JSON = _REPO_ROOT / "exports" / "wallet10_mimic_search.json"
 IY2_PARAMS_JSON = _REPO_ROOT / "strategy_params" / "iy2_summary.json"
+IY3_PARAMS_JSON = _REPO_ROOT / "strategy_params" / "iy3_summary.json"
 AA1_STRATEGY_PROFILE_ID = "AA1_deep_v1_m42_d03_cd15_ml8_c30_tp97"
 STRATEGY_0_PROFILE_ID = "STRATEGY_0_current_v1"
 STRATEGY_0_META_PROFILE_ID = "STRATEGY_0_meta_public_v4_delay12_wr739_pnl1386"
 MIMIC_STRATEGY_PROFILE_ID = "MIMIC_wallet10_fixed_lot5_v1"
 IY2_STRATEGY_PROFILE_ID = "IY2_wallet_overlap_v1"
+IY3_STRATEGY_PROFILE_ID = "IY3_wallet_overlap_path_v1"
 IY2_MAX_IMBALANCE_SHARES = 5
 WD_STRATEGY_PROFILE_ID = "WD_wallet_strict_v1"
 VOLUME_T10_STRATEGY_PROFILE_ID = "BTC_VOLUME_T10_dual_v1"
@@ -78,6 +80,9 @@ def _load_best_params_json(path: Path) -> dict[str, float] | None:
                 "candidate_share_cap",
                 "same_side_dedupe_seconds",
                 "same_side_dedupe_price_band",
+                "enable_target_prop_override",
+                "path_spend_scale",
+                "extreme_cheap_max_price",
             ):
                 if key in data:
                     merged[key] = data[key]
@@ -624,14 +629,16 @@ class Btc15RedeemEngine:
         self._iy2_last_fill_price: dict[str, float | None] = {"UP": None, "DOWN": None}
         self._iy2_last_filled_side: str | None = None
         self._iy2_last_fail_elapsed: dict[str, float] = {"UP": -10_000.0, "DOWN": -10_000.0}
-        if self.config.strategy_mode == "iy2":
-            loaded = _load_best_params_json(IY2_PARAMS_JSON)
+        if self.config.strategy_mode in {"iy2", "iy3"}:
+            iy_params_path = IY3_PARAMS_JSON if self.config.strategy_mode == "iy3" else IY2_PARAMS_JSON
+            loaded = _load_best_params_json(iy_params_path)
             if loaded:
                 self._iy2_params = loaded
             else:
                 LOGGER.error(
-                    "strategy_mode=iy2 but could not load params from %s â€” falling back to aa1",
-                    IY2_PARAMS_JSON,
+                    "strategy_mode=%s but could not load params from %s, falling back to aa1",
+                    self.config.strategy_mode,
+                    iy_params_path,
                 )
 
         self._box_lot_counts: dict[str, int] = {"UP": 0, "DOWN": 0}
@@ -651,7 +658,10 @@ class Btc15RedeemEngine:
         return self.config.strategy_mode == "champ4_6s"
 
     def _strategy_mode_iy2(self) -> bool:
-        return self.config.strategy_mode == "iy2" and bool(self._iy2_params)
+        return self.config.strategy_mode in {"iy2", "iy3"} and bool(self._iy2_params)
+
+    def _strategy_mode_iy3(self) -> bool:
+        return self.config.strategy_mode == "iy3" and bool(self._iy2_params)
 
     def _strategy_mode_box_balance(self) -> bool:
         return self.config.strategy_mode == "box_balance"
@@ -4149,6 +4159,49 @@ class Btc15RedeemEngine:
         roi_not_much_worse = projected_worst_roi >= allowed_floor
         return cheap_enough and pair_improves and roi_not_much_worse
 
+    def _iy2_target_proportion_override(
+        self,
+        *,
+        current_up_shares: float,
+        current_down_shares: float,
+        current_up_cost: float,
+        current_down_cost: float,
+        side_label: str,
+        fill_price: float,
+        shares: int,
+        target: dict[str, Any],
+        budget_cap: float,
+    ) -> bool:
+        current_total_cost = current_up_cost + current_down_cost
+        current_total_shares = current_up_shares + current_down_shares
+        if current_total_cost <= 0 or current_total_shares <= 0:
+            return False
+        next_up_shares = current_up_shares + (shares if side_label == "UP" else 0.0)
+        next_down_shares = current_down_shares + (shares if side_label == "DOWN" else 0.0)
+        if abs(next_up_shares - next_down_shares) > IY2_MAX_IMBALANCE_SHARES:
+            return False
+        next_total_cost = current_total_cost + (fill_price * shares)
+        target_total_notional = float(target.get("up_notional_target", 0.0) or 0.0) + float(
+            target.get("down_notional_target", 0.0) or 0.0
+        )
+        path_spend_scale = float(self._iy2_params.get("path_spend_scale", 0.55) or 0.55)
+        path_budget = min(budget_cap, target_total_notional * path_spend_scale)
+        target_ratio = float(target.get("up_share_ratio_0_1", 0.5) or 0.5)
+        current_ratio = current_up_shares / current_total_shares if current_total_shares > 0 else 0.5
+        next_total_shares = next_up_shares + next_down_shares
+        next_ratio = next_up_shares / next_total_shares if next_total_shares > 0 else current_ratio
+        ratio_gain = abs(current_ratio - target_ratio) - abs(next_ratio - target_ratio)
+        weak_side = self._iy2_weak_side_name(
+            current_up_shares,
+            current_down_shares,
+            current_up_cost,
+            current_down_cost,
+        )
+        extreme_cheap_max = float(self._iy2_params.get("extreme_cheap_max_price", 0.12) or 0.12)
+        under_path_budget = next_total_cost <= (path_budget + 1e-9)
+        extreme_cheap_follow = side_label == weak_side and fill_price <= extreme_cheap_max and ratio_gain >= -0.05
+        return (ratio_gain > 1e-9 and under_path_budget) or extreme_cheap_follow
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -4237,6 +4290,10 @@ class Btc15RedeemEngine:
                 next_total_shares = next_up_shares + next_down_shares
                 next_dom_ratio = self._iy2_dominant_ratio(next_up_shares, next_down_shares) if next_total_shares > 0 else 0.5
                 next_dominant_side = self._iy2_dominant_side(next_up_shares, next_down_shares)
+                current_ratio = (local_up_shares / current_total_shares) if current_total_shares > 0 else 0.5
+                next_ratio = (next_up_shares / next_total_shares) if next_total_shares > 0 else current_ratio
+                target_ratio = float(target.get("up_share_ratio_0_1", 0.5) or 0.5)
+                ratio_gain = abs(current_ratio - target_ratio) - abs(next_ratio - target_ratio)
                 if abs(next_up_shares - next_down_shares) > IY2_MAX_IMBALANCE_SHARES:
                     continue
                 next_distance = self._iy2_wallet_path_distance(
@@ -4287,16 +4344,31 @@ class Btc15RedeemEngine:
                         weak_roi_floor=float(target.get("weak_roi_floor", 0.0) or 0.0),
                     )
                 )
-                if total_cost > 0 and not side_missing and min(next_up_roi, next_down_roi) <= current_min_roi + 1e-9 and not cheap_accum_ok:
+                target_prop_ok = self._strategy_mode_iy3() and self._iy2_target_proportion_override(
+                    current_up_shares=local_up_shares,
+                    current_down_shares=local_down_shares,
+                    current_up_cost=local_up_cost,
+                    current_down_cost=local_down_cost,
+                    side_label=side_label,
+                    fill_price=ref,
+                    shares=shares,
+                    target=target,
+                    budget_cap=budget_cap,
+                )
+                if total_cost > 0 and not side_missing and min(next_up_roi, next_down_roi) <= current_min_roi + 1e-9 and not cheap_accum_ok and not target_prop_ok:
                     continue
-                if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok and not cheap_accum_ok:
+                if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok and not cheap_accum_ok and not target_prop_ok:
                     continue
-                if ((worsens_floor or lopsided_worsens) and not cheap_accum_ok) or dominant_chase:
+                if ((worsens_floor or lopsided_worsens) and not cheap_accum_ok and not target_prop_ok) or dominant_chase:
                     continue
-                situation_gain = (min(next_up_roi, next_down_roi) - current_min_roi) - max(0.0, next_dom_ratio - current_dom_ratio)
+                situation_gain = (
+                    (min(next_up_roi, next_down_roi) - current_min_roi)
+                    - max(0.0, next_dom_ratio - current_dom_ratio)
+                    + max(0.0, ratio_gain) * 3.0
+                )
                 if (
                     improvement >= improvement_min and (price_ok or risk_improves or target_catchup or bootstrap_ok)
-                ) or cheap_accum_ok:
+                ) or cheap_accum_ok or target_prop_ok:
                     if best_candidate is None or (situation_gain, improvement) > (best_candidate[0], best_candidate[1]):
                         best_candidate = (situation_gain, improvement, side_label, shares)
 
@@ -4520,7 +4592,18 @@ class Btc15RedeemEngine:
                 cheap_buffer=cheap_buffer,
                 weak_roi_floor=float(target.get("weak_roi_floor", 0.0) or 0.0),
             )
-            if current_total_cost > 0 and not side_missing and projected_worst_roi <= current_worst_roi + 1e-9 and not cheap_accum_ok:
+            target_prop_ok = self._strategy_mode_iy3() and self._iy2_target_proportion_override(
+                current_up_shares=current_up_shares,
+                current_down_shares=current_down_shares,
+                current_up_cost=current_up_cost,
+                current_down_cost=current_down_cost,
+                side_label=candidate.side_label,
+                fill_price=limit_price,
+                shares=shares,
+                target=target,
+                budget_cap=max(1.0, float(self._window_budget_usdc or self.config.strategy_budget_cap_usdc)),
+            )
+            if current_total_cost > 0 and not side_missing and projected_worst_roi <= current_worst_roi + 1e-9 and not cheap_accum_ok and not target_prop_ok:
                 self._no_signal_reason = "iy2 buy does not improve worst-case roi"
                 return False
 

@@ -379,6 +379,53 @@ def _clamp_one_leg_for_cap(
 TryBuy = Callable[..., float]
 
 
+def _effective_pair_sum_cap(
+    base_max: float,
+    *,
+    tighten_per_fill: float,
+    min_floor: float,
+    n_fills: int,
+) -> float:
+    """Lower the pair sum cap as fills accrue (wait for better mids on later clips)."""
+    if tighten_per_fill <= 0:
+        return float(base_max)
+    return max(float(min_floor), float(base_max) - float(tighten_per_fill) * int(n_fills))
+
+
+def _effective_target_roi(
+    base_roi: float,
+    *,
+    per_fill: float,
+    n_fills: int,
+) -> float:
+    """Optional stricter marginal ROI after each fill."""
+    if per_fill <= 0:
+        return float(base_roi)
+    return float(base_roi) + float(per_fill) * int(n_fills)
+
+
+def _violates_blended_avg_sum_cap(
+    size_up: float,
+    avg_up: float,
+    size_down: float,
+    avg_down: float,
+    *,
+    side: Side,
+    sh: float,
+    px: float,
+    cap: float | None,
+) -> bool:
+    """After a one-leg buy: if both legs exist, require avg_up + avg_down <= cap."""
+    if cap is None or float(cap) <= 0 or sh <= 1e-9:
+        return False
+    nsu, nau, nsd, nad = apply_buy_fill(
+        size_up, avg_up, size_down, avg_down, side=side, add_shares=sh, fill_price=px
+    )
+    if nsu <= 1e-9 or nsd <= 1e-9:
+        return False
+    return nau + nad > float(cap) + 1e-9
+
+
 def paladin_step(
     runner: PaladinPairRunner,
     t: int,
@@ -398,12 +445,30 @@ def paladin_step(
     pair_size_pick: Literal["ascending", "max_feasible"] = "max_feasible",
     try_buy_fn: TryBuy | None = None,
     max_shares_per_side: float | None = None,
+    pair_sum_tighten_per_fill: float = 0.0,
+    pair_sum_min_floor: float = 0.88,
+    force_hedge_respects_effective_sum: bool = False,
+    second_leg_book_improve_eps: float = 0.0,
+    target_roi_per_fill: float = 0.0,
+    pending_hedge_bypass_imbalance_shares: float | None = None,
+    discipline_relax_after_forced_sec: float | None = None,
+    max_blended_pair_avg_sum: float | None = None,
 ) -> bool:
     """Advance PALADIN by one simulated second. Returns True if profit-lock stopped trading."""
     st = runner.st
     buy: TryBuy = try_buy_fn if try_buy_fn is not None else try_buy
     min_notional = 1.0
     min_clip = float(params.min_clip_shares)
+    n_fills = len(st.trades)
+    eff_sum_max = _effective_pair_sum_cap(
+        pair_sum_max,
+        tighten_per_fill=pair_sum_tighten_per_fill,
+        min_floor=pair_sum_min_floor,
+        n_fills=n_fills,
+    )
+    eff_target_roi = _effective_target_roi(
+        target_min_roi, per_fill=target_roi_per_fill, n_fills=n_fills
+    )
     if (
         max_shares_per_side is not None
         and max_shares_per_side > 0
@@ -423,22 +488,70 @@ def paladin_step(
         if float(t) + 1e-9 < ready_at:
             return False
         px = pm_u if side_w == "up" else pm_d
+        hf_sec = float(stagger_hedge_force_after_seconds or 0.0)
+        time_force_deadline = float(ready_at) + hf_sec
         force_hedge = (
             stagger_pair_entry
             and stagger_hedge_force_after_seconds is not None
-            and float(stagger_hedge_force_after_seconds) > 0
-            and float(t) + 1e-9 >= ready_at + float(stagger_hedge_force_after_seconds)
+            and hf_sec > 0
+            and float(t) + 1e-9 >= time_force_deadline
         )
+        imb_abs = abs(share_imbalance(st.size_up, st.size_down))
+        bypass_thr = pending_hedge_bypass_imbalance_shares
+        bypass_imb = (
+            bypass_thr is not None
+            and float(bypass_thr) > 0
+            and imb_abs >= float(bypass_thr) - 1e-9
+        )
+        drel = discipline_relax_after_forced_sec
+        extra_relax = (
+            drel is not None
+            and float(drel) > 0
+            and force_hedge
+            and float(t) + 1e-9 >= time_force_deadline + float(drel)
+        )
+        use_relaxed_pending = bypass_imb or extra_relax
+        eff_sum_pending = float(pair_sum_max) if use_relaxed_pending else eff_sum_max
+        book_eps_pending = 0.0 if use_relaxed_pending else second_leg_book_improve_eps
         if stagger_pair_entry and not force_hedge:
-            if pm_u + pm_d > pair_sum_max + 1e-9:
+            if pm_u + pm_d > eff_sum_pending + 1e-9:
+                return False
+            if (
+                book_eps_pending > 0
+                and st.size_up > 1e-9
+                and st.size_down > 1e-9
+                and pm_u + pm_d > st.avg_up + st.avg_down - book_eps_pending + 1e-9
+            ):
                 return False
             mr = min_roi_after_buy_leg(
                 st.size_up, st.avg_up, st.size_down, st.avg_down, side=side_w, sh=sh_w, px=px
             )
-            if mr + 1e-9 < target_min_roi:
+            if mr + 1e-9 < eff_target_roi:
                 return False
         if force_hedge:
-            reason_second = "stagger_second_force"
+            # Old behavior: force skipped sum/ROI. When tightening, book-beat, or explicit flag is on,
+            # keep waiting for a cheaper second leg instead of buying a bad forced hedge.
+            discipline_force = (
+                not use_relaxed_pending
+                and (
+                    force_hedge_respects_effective_sum
+                    or pair_sum_tighten_per_fill > 0
+                    or second_leg_book_improve_eps > 0
+                )
+            )
+            if discipline_force:
+                if pm_u + pm_d > eff_sum_max + 1e-9:
+                    return False
+                if (
+                    second_leg_book_improve_eps > 0
+                    and st.size_up > 1e-9
+                    and st.size_down > 1e-9
+                    and pm_u + pm_d > st.avg_up + st.avg_down - second_leg_book_improve_eps + 1e-9
+                ):
+                    return False
+            reason_second = (
+                "stagger_second_force_imb_relax" if use_relaxed_pending else "stagger_second_force"
+            )
         elif stagger_pair_entry:
             reason_second = "stagger_second"
         else:
@@ -447,6 +560,20 @@ def paladin_step(
             sh_w, st, side=side_w, max_shares_per_side=max_shares_per_side, min_clip=min_clip
         )
         if sh_exec < min_clip - 1e-9:
+            return False
+        if (
+            not use_relaxed_pending
+            and _violates_blended_avg_sum_cap(
+                st.size_up,
+                st.avg_up,
+                st.size_down,
+                st.avg_down,
+                side=side_w,
+                sh=sh_exec,
+                px=px,
+                cap=max_blended_pair_avg_sum,
+            )
+        ):
             return False
         filled_w = buy(
             st,
@@ -521,6 +648,17 @@ def paladin_step(
                 av = st.avg_up if side_try == "up" else st.avg_down
                 if sz > 1e-9 and not improves_leg(sz, av, px_try, sh_use):
                     continue
+                if _violates_blended_avg_sum_cap(
+                    st.size_up,
+                    st.avg_up,
+                    st.size_down,
+                    st.avg_down,
+                    side=side_try,
+                    sh=sh_use,
+                    px=px_try,
+                    cap=max_blended_pair_avg_sum,
+                ):
+                    continue
                 ff = buy(
                     st,
                     t=t,
@@ -546,7 +684,7 @@ def paladin_step(
                 runner.last_buy_elapsed = float(t)
             return False
 
-        if pair_px > pair_sum_max + 1e-9:
+        if pair_px > eff_sum_max + 1e-9:
             return False
         sh_pair = 0.0
         for cand in cands:
@@ -565,31 +703,41 @@ def paladin_step(
             mr = min_roi_after_symmetric_pair(
                 st.size_up, st.avg_up, st.size_down, st.avg_down, pm_u, pm_d, sh_try
             )
-            if mr + 1e-9 >= target_min_roi:
+            if mr + 1e-9 >= eff_target_roi:
                 sh_pair = sh_try
                 break
         if sh_pair <= 0:
             return False
         pair_cost = sh_pair * pair_px
         if sh_pair > 0 and can_afford(st.spent_usdc, pair_cost, budget_usdc):
-            filled_up = buy(
-                st,
-                t=t,
+            if not _violates_blended_avg_sum_cap(
+                st.size_up,
+                st.avg_up,
+                st.size_down,
+                st.avg_down,
                 side="up",
-                shares=sh_pair,
+                sh=sh_pair,
                 px=pm_u,
-                reason="pair_up",
-                budget=budget_usdc,
-                min_notional=min_notional,
-                min_shares=min_clip,
-            )
-            if filled_up > 0:
-                runner.pending_second_leg = (
-                    "down",
-                    filled_up,
-                    float(t) + float(cooldown_seconds),
+                cap=max_blended_pair_avg_sum,
+            ):
+                filled_up = buy(
+                    st,
+                    t=t,
+                    side="up",
+                    shares=sh_pair,
+                    px=pm_u,
+                    reason="pair_up",
+                    budget=budget_usdc,
+                    min_notional=min_notional,
+                    min_shares=min_clip,
                 )
-                runner.last_buy_elapsed = float(t)
+                if filled_up > 0:
+                    runner.pending_second_leg = (
+                        "down",
+                        filled_up,
+                        float(t) + float(cooldown_seconds),
+                    )
+                    runner.last_buy_elapsed = float(t)
         return False
 
     if abs(imb) > max_d + 1e-9:
@@ -615,7 +763,7 @@ def paladin_step(
                 runner.last_buy_elapsed = float(t)
         return False
 
-    if pm_u + pm_d <= pair_sum_max:
+    if pm_u + pm_d <= eff_sum_max:
         sh_pair = shares_affordable(pm_u, budget_left, clip, min_sh=min_clip)
         sh_pair = _clamp_symmetric_clip_for_cap(
             sh_pair, st, max_shares_per_side=max_shares_per_side, min_clip=min_clip
@@ -625,29 +773,39 @@ def paladin_step(
             ok_u = improves_leg(st.size_up, st.avg_up, pm_u, sh_pair)
             ok_d = improves_leg(st.size_down, st.avg_down, pm_d, sh_pair)
             if ok_u and ok_d:
-                filled_up = buy(
-                    st,
-                    t=t,
+                if not _violates_blended_avg_sum_cap(
+                    st.size_up,
+                    st.avg_up,
+                    st.size_down,
+                    st.avg_down,
                     side="up",
-                    shares=sh_pair,
+                    sh=sh_pair,
                     px=pm_u,
-                    reason="pair_up",
-                    budget=budget_usdc,
-                    min_notional=min_notional,
-                    min_shares=min_clip,
-                )
-                if filled_up > 0:
-                    runner.pending_second_leg = (
-                        "down",
-                        filled_up,
-                        float(t) + float(cooldown_seconds),
+                    cap=max_blended_pair_avg_sum,
+                ):
+                    filled_up = buy(
+                        st,
+                        t=t,
+                        side="up",
+                        shares=sh_pair,
+                        px=pm_u,
+                        reason="pair_up",
+                        budget=budget_usdc,
+                        min_notional=min_notional,
+                        min_shares=min_clip,
                     )
-                    runner.last_buy_elapsed = float(t)
+                    if filled_up > 0:
+                        runner.pending_second_leg = (
+                            "down",
+                            filled_up,
+                            float(t) + float(cooldown_seconds),
+                        )
+                        runner.last_buy_elapsed = float(t)
                 return False
 
     min_leg = min(st.size_up, st.size_down)
     min_shares_for_pair_only = float(params.profit_lock_min_shares_per_side)
-    allow_single_leg = min_leg < min_shares_for_pair_only - 1e-9 or (pm_u + pm_d) > pair_sum_max + 1e-9
+    allow_single_leg = min_leg < min_shares_for_pair_only - 1e-9 or (pm_u + pm_d) > eff_sum_max + 1e-9
     if not allow_single_leg:
         return False
 
@@ -702,6 +860,14 @@ def run_window(
     pair_size_pick: Literal["ascending", "max_feasible"] = "max_feasible",
     try_buy_fn: TryBuy | None = None,
     max_shares_per_side: float | None = None,
+    pair_sum_tighten_per_fill: float = 0.0,
+    pair_sum_min_floor: float = 0.88,
+    force_hedge_respects_effective_sum: bool = False,
+    second_leg_book_improve_eps: float = 0.0,
+    target_roi_per_fill: float = 0.0,
+    pending_hedge_bypass_imbalance_shares: float | None = None,
+    discipline_relax_after_forced_sec: float | None = None,
+    max_blended_pair_avg_sum: float | None = None,
 ) -> SimState:
     runner = PaladinPairRunner()
     for t, (pm_u, pm_d) in enumerate(prices):
@@ -723,6 +889,14 @@ def run_window(
             pair_size_pick=pair_size_pick,
             try_buy_fn=try_buy_fn,
             max_shares_per_side=max_shares_per_side,
+            pair_sum_tighten_per_fill=pair_sum_tighten_per_fill,
+            pair_sum_min_floor=pair_sum_min_floor,
+            force_hedge_respects_effective_sum=force_hedge_respects_effective_sum,
+            second_leg_book_improve_eps=second_leg_book_improve_eps,
+            target_roi_per_fill=target_roi_per_fill,
+            pending_hedge_bypass_imbalance_shares=pending_hedge_bypass_imbalance_shares,
+            discipline_relax_after_forced_sec=discipline_relax_after_forced_sec,
+            max_blended_pair_avg_sum=max_blended_pair_avg_sum,
         ):
             break
     return runner.st
@@ -952,6 +1126,53 @@ def main() -> int:
         default="max_feasible",
         help="How to pick size among ROI-feasible clips: smallest first, or largest first (default).",
     )
+    ap.add_argument(
+        "--pair-sum-tighten-per-fill",
+        type=float,
+        default=0.0,
+        help="Lower pair sum cap by this amount per completed fill (0=off). Waits for cheaper mids on later clips.",
+    )
+    ap.add_argument(
+        "--pair-sum-min-floor",
+        type=float,
+        default=0.88,
+        help="Minimum pair sum cap when using --pair-sum-tighten-per-fill.",
+    )
+    ap.add_argument(
+        "--force-hedge-respect-effective-sum",
+        action="store_true",
+        help="On stagger force-hedge timer, still require pm_up+pm_down <= effective pair cap (and book beat if set).",
+    )
+    ap.add_argument(
+        "--second-leg-book-improve-eps",
+        type=float,
+        default=0.0,
+        help="When both legs already have size, second leg requires pm_up+pm_down <= avg_up+avg_down - eps (0=off).",
+    )
+    ap.add_argument(
+        "--target-roi-per-fill",
+        type=float,
+        default=0.0,
+        help="Add this to target_min_roi for each completed fill (stricter marginal ROI as book grows).",
+    )
+    ap.add_argument(
+        "--pending-hedge-bypass-imbalance-shares",
+        type=float,
+        default=0.0,
+        help="When |up-down| >= this, pending 2nd leg uses base pair_sum_max (drops tighten/book beat for that leg).",
+    )
+    ap.add_argument(
+        "--discipline-relax-after-forced-sec",
+        type=float,
+        default=0.0,
+        help="After force-hedge time + this many seconds, relax discipline on the pending leg (0=off).",
+    )
+    ap.add_argument(
+        "--max-blended-pair-avg-sum",
+        type=float,
+        default=0.0,
+        help="If >0: after any one-leg buy, if both legs exist, require avg_up+avg_down <= this (0=off).",
+    )
     args = ap.parse_args()
 
     pl_cfg = load_profit_lock_config(args.config)
@@ -998,6 +1219,26 @@ def main() -> int:
         dynamic_clip_cap=args.dynamic_clip_max,
         pair_size_pick=args.pair_size_pick,  # type: ignore[arg-type]
         max_shares_per_side=mx_sh,
+        pair_sum_tighten_per_fill=float(args.pair_sum_tighten_per_fill),
+        pair_sum_min_floor=float(args.pair_sum_min_floor),
+        force_hedge_respects_effective_sum=bool(args.force_hedge_respect_effective_sum),
+        second_leg_book_improve_eps=float(args.second_leg_book_improve_eps),
+        target_roi_per_fill=float(args.target_roi_per_fill),
+        pending_hedge_bypass_imbalance_shares=(
+            None
+            if float(args.pending_hedge_bypass_imbalance_shares) <= 0
+            else float(args.pending_hedge_bypass_imbalance_shares)
+        ),
+        discipline_relax_after_forced_sec=(
+            None
+            if float(args.discipline_relax_after_forced_sec) <= 0
+            else float(args.discipline_relax_after_forced_sec)
+        ),
+        max_blended_pair_avg_sum=(
+            None
+            if float(args.max_blended_pair_avg_sum) <= 0
+            else float(args.max_blended_pair_avg_sum)
+        ),
     )
 
     slug = window_slug_from_prices_csv(args.prices)

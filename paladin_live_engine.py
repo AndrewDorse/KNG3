@@ -8,8 +8,8 @@ Core loop (each poll, default ~1s via BOT_POLL_INTERVAL_SECONDS):
   3) Build window elapsed time; apply pre-window / entry-delay / new-order-cutoff / end-game guards
      (pending hedge legs are still completed when we would otherwise block new risk).
   4) Run paladin_step on shared PALADIN rules: profit-lock (PnL+ROI vs paladin_sim_config.json),
-     staggered or symmetric pair adds, marginal ROI + pair-sum gates, optional hedge force timer,
-     max shares/side cap — decides side, size, and reason.
+     staggered or symmetric pair adds, marginal ROI + pair-sum gates (with per-fill tighten + floor),
+     hedge force timer, imbalance bypass and post-force relax (BOT_PALADIN_*), max shares/side cap.
   5) Execute marketable buys via PolymarketTrader (FAK); update sim state for next tick.
 
 Cooldown: BOT_PALADIN_COOLDOWN_SEC=0 on live (no sim-only delay between legs). Replay uses ~2s.
@@ -91,6 +91,13 @@ class PaladinLiveEngine:
             self.config.dry_run,
             float(self.config.poll_interval_seconds),
             float(self.config.paladin_cooldown_seconds),
+        )
+        LOGGER.info(
+            "PALADIN discipline | tighten_pf=%.4f sum_floor=%.2f imb_bypass_sh=%s relax_after_force_s=%s",
+            float(self.config.paladin_pair_sum_tighten_per_fill),
+            float(self.config.paladin_pair_sum_min_floor),
+            self.config.paladin_pending_hedge_bypass_imbalance_shares,
+            self.config.paladin_discipline_relax_after_forced_sec,
         )
         while not self._stop:
             self._loop_once()
@@ -401,6 +408,10 @@ class PaladinLiveEngine:
             dynamic_clip_cap=float(self.config.paladin_dynamic_clip_cap),
             pair_size_pick="max_feasible",
             try_buy_fn=try_buy_fn,
+            pair_sum_tighten_per_fill=float(self.config.paladin_pair_sum_tighten_per_fill),
+            pair_sum_min_floor=float(self.config.paladin_pair_sum_min_floor),
+            pending_hedge_bypass_imbalance_shares=self.config.paladin_pending_hedge_bypass_imbalance_shares,
+            discipline_relax_after_forced_sec=self.config.paladin_discipline_relax_after_forced_sec,
         )
         if stopped:
             m = runner.st.snapshot_metrics()

@@ -177,6 +177,12 @@ class BotConfig:
     paladin_cooldown_seconds: float = 0.0
     # Per-leg clip cap when min leg >= 20 (pair_clip_candidates_dynamic upper bound).
     paladin_dynamic_clip_cap: float = 10.0
+    # Price discipline (batch-tuned “balanced” profile): tighten pair-sum cap per fill; relax pending hedge
+    # when |imb| >= bypass shares or after force timer + relax seconds. (0.0035 also ties in sim; default 0.004.)
+    paladin_pair_sum_tighten_per_fill: float = 0.004
+    paladin_pair_sum_min_floor: float = 0.90
+    paladin_pending_hedge_bypass_imbalance_shares: float | None = 10.0
+    paladin_discipline_relax_after_forced_sec: float | None = 60.0
 
     @property
     def window_size_seconds(self) -> int:
@@ -316,6 +322,22 @@ class BotConfig:
             ),
             paladin_cooldown_seconds=max(0.0, _env_float("BOT_PALADIN_COOLDOWN_SEC", 0.0)),
             paladin_dynamic_clip_cap=max(5.0, _env_float("BOT_PALADIN_DYNAMIC_CLIP_CAP", 10.0)),
+            paladin_pair_sum_tighten_per_fill=max(
+                0.0, _env_float("BOT_PALADIN_PAIR_SUM_TIGHTEN_PER_FILL", 0.004)
+            ),
+            paladin_pair_sum_min_floor=max(
+                0.80, min(0.999, _env_float("BOT_PALADIN_PAIR_SUM_MIN_FLOOR", 0.90))
+            ),
+            paladin_pending_hedge_bypass_imbalance_shares=(
+                None
+                if _env_float("BOT_PALADIN_PENDING_HEDGE_BYPASS_IMBALANCE_SH", 10.0) <= 0
+                else _env_float("BOT_PALADIN_PENDING_HEDGE_BYPASS_IMBALANCE_SH", 10.0)
+            ),
+            paladin_discipline_relax_after_forced_sec=(
+                None
+                if _env_float("BOT_PALADIN_DISCIPLINE_RELAX_AFTER_FORCE_SEC", 60.0) <= 0
+                else _env_float("BOT_PALADIN_DISCIPLINE_RELAX_AFTER_FORCE_SEC", 60.0)
+            ),
         )
 
 

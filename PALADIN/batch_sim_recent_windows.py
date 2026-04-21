@@ -96,6 +96,27 @@ def main() -> int:
     ap.add_argument("--profit-lock-min-shares", type=float, default=None)
     ap.add_argument("--no-usd-profit-lock", action="store_true")
     ap.add_argument("--profit-lock-usdc-each", type=float, default=None)
+    ap.add_argument("--pair-sum-tighten-per-fill", type=float, default=0.0)
+    ap.add_argument("--pair-sum-min-floor", type=float, default=0.88)
+    ap.add_argument("--second-leg-book-improve-eps", type=float, default=0.0)
+    ap.add_argument(
+        "--pending-hedge-bypass-imbalance-shares",
+        type=float,
+        default=0.0,
+        help="Relax tighten/book discipline on pending 2nd leg when |up-down| >= this (0=off).",
+    )
+    ap.add_argument(
+        "--discipline-relax-after-forced-sec",
+        type=float,
+        default=0.0,
+        help="After force-hedge deadline + this many seconds, relax discipline (0=off).",
+    )
+    ap.add_argument(
+        "--max-blended-pair-avg-sum",
+        type=float,
+        default=0.0,
+        help="Cap avg_up+avg_down after fills when both legs exist (0=off).",
+    )
     args = ap.parse_args()
     if args.live_paladin:
         args.budget = 80.0
@@ -105,6 +126,15 @@ def main() -> int:
         args.stagger_pair = True
         args.cooldown_seconds = 0.0
         args.dynamic_clip_max = 10.0
+        # Balanced profile defaults; only fill CLI args still at generic defaults.
+        if args.pair_sum_tighten_per_fill <= 0:
+            args.pair_sum_tighten_per_fill = 0.004
+        if abs(args.pair_sum_min_floor - 0.88) < 1e-9:
+            args.pair_sum_min_floor = 0.90
+        if args.pending_hedge_bypass_imbalance_shares <= 0:
+            args.pending_hedge_bypass_imbalance_shares = 10.0
+        if args.discipline_relax_after_forced_sec <= 0:
+            args.discipline_relax_after_forced_sec = 60.0
 
     if args.stagger_hedge_force_sec < 0:
         hedge_force: float | None = 45.0 if args.stagger_pair else None
@@ -162,7 +192,10 @@ def main() -> int:
         f"hedge_force_s={hedge_force} | max_sh/side={max_sh_per_side} | "
         f"pair_sum_max={args.pair_sum_max} target_min_roi={args.target_min_roi} | "
         f"dynamic_clip_max={args.dynamic_clip_max} | "
-        f"pair_size_pick={args.pair_size_pick} | cooldown={args.cooldown_seconds}s"
+        f"pair_size_pick={args.pair_size_pick} | cooldown={args.cooldown_seconds}s | "
+        f"tighten_pf={args.pair_sum_tighten_per_fill} floor={args.pair_sum_min_floor} | "
+        f"book_eps={args.second_leg_book_improve_eps} imb_bypass={args.pending_hedge_bypass_imbalance_shares} "
+        f"relax_after_force={args.discipline_relax_after_forced_sec}"
     )
     print(
         f"Profit lock: roi>={roi_lock:.0%} each leg (>={min_sh_lock:.0f} sh/side) | "
@@ -204,6 +237,24 @@ def main() -> int:
             dynamic_clip_cap=args.dynamic_clip_max,
             pair_size_pick=args.pair_size_pick,  # type: ignore[arg-type]
             max_shares_per_side=max_sh_per_side,
+            pair_sum_tighten_per_fill=float(args.pair_sum_tighten_per_fill),
+            pair_sum_min_floor=float(args.pair_sum_min_floor),
+            second_leg_book_improve_eps=float(args.second_leg_book_improve_eps),
+            pending_hedge_bypass_imbalance_shares=(
+                None
+                if float(args.pending_hedge_bypass_imbalance_shares) <= 0
+                else float(args.pending_hedge_bypass_imbalance_shares)
+            ),
+            discipline_relax_after_forced_sec=(
+                None
+                if float(args.discipline_relax_after_forced_sec) <= 0
+                else float(args.discipline_relax_after_forced_sec)
+            ),
+            max_blended_pair_avg_sum=(
+                None
+                if float(args.max_blended_pair_avg_sum) <= 0
+                else float(args.max_blended_pair_avg_sum)
+            ),
         )
         m = st.snapshot_metrics()
         slug = window_slug_from_prices_csv(prices_path)
