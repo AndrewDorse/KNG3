@@ -4067,6 +4067,88 @@ class Btc15RedeemEngine:
         down_roi = (next_down_shares / next_total_cost) - 1.0
         return min(up_roi, down_roi)
 
+    def _iy2_weak_side_name(
+        self,
+        up_shares: float,
+        down_shares: float,
+        up_cost: float,
+        down_cost: float,
+    ) -> str:
+        total_cost = up_cost + down_cost
+        if total_cost <= 0:
+            return "UP" if up_shares <= down_shares else "DOWN"
+        up_roi = (up_shares / total_cost) - 1.0
+        down_roi = (down_shares / total_cost) - 1.0
+        if abs(up_roi - down_roi) <= 1e-9:
+            return "UP" if up_shares <= down_shares else "DOWN"
+        return "UP" if up_roi < down_roi else "DOWN"
+
+    def _iy2_pair_sum(self, up_shares: float, down_shares: float, up_cost: float, down_cost: float) -> float:
+        up_avg = (up_cost / up_shares) if up_shares > 0 else 0.0
+        down_avg = (down_cost / down_shares) if down_shares > 0 else 0.0
+        return up_avg + down_avg
+
+    def _iy2_cheap_accumulation_override(
+        self,
+        *,
+        current_up_shares: float,
+        current_down_shares: float,
+        current_up_cost: float,
+        current_down_cost: float,
+        side_label: str,
+        fill_price: float,
+        shares: int,
+        target_avg: float,
+        cheap_buffer: float,
+        weak_roi_floor: float,
+    ) -> bool:
+        current_total_cost = current_up_cost + current_down_cost
+        if current_total_cost <= 0:
+            return False
+        if (side_label == "UP" and current_up_shares <= 0) or (side_label == "DOWN" and current_down_shares <= 0):
+            return False
+        weak_side = self._iy2_weak_side_name(
+            current_up_shares,
+            current_down_shares,
+            current_up_cost,
+            current_down_cost,
+        )
+        if side_label != weak_side:
+            return False
+        next_up_shares = current_up_shares + (shares if side_label == "UP" else 0.0)
+        next_down_shares = current_down_shares + (shares if side_label == "DOWN" else 0.0)
+        if abs(next_up_shares - next_down_shares) > IY2_MAX_IMBALANCE_SHARES:
+            return False
+        next_up_cost = current_up_cost + (fill_price * shares if side_label == "UP" else 0.0)
+        next_down_cost = current_down_cost + (fill_price * shares if side_label == "DOWN" else 0.0)
+        current_worst_roi = min(
+            (current_up_shares / current_total_cost) - 1.0,
+            (current_down_shares / current_total_cost) - 1.0,
+        )
+        projected_worst_roi = self._iy2_projected_worst_roi(
+            current_up_shares,
+            current_down_shares,
+            current_up_cost,
+            current_down_cost,
+            side_label,
+            fill_price,
+            shares,
+        )
+        current_side_shares = current_up_shares if side_label == "UP" else current_down_shares
+        current_side_cost = current_up_cost if side_label == "UP" else current_down_cost
+        current_avg = (current_side_cost / current_side_shares) if current_side_shares > 0 else 0.0
+        current_pair = self._iy2_pair_sum(current_up_shares, current_down_shares, current_up_cost, current_down_cost)
+        projected_pair = self._iy2_pair_sum(next_up_shares, next_down_shares, next_up_cost, next_down_cost)
+        cheap_enough = (
+            fill_price <= 0.20
+            or (target_avg > 0 and fill_price <= (target_avg + cheap_buffer))
+            or (current_avg > 0 and fill_price <= max(0.01, current_avg - 0.02))
+        )
+        pair_improves = projected_pair <= (current_pair - 0.02)
+        allowed_floor = min(current_worst_roi - 0.03, weak_roi_floor - 0.02)
+        roi_not_much_worse = projected_worst_roi >= allowed_floor
+        return cheap_enough and pair_improves and roi_not_much_worse
+
     def _iy2_evaluate_tick(self, snapshot: BookSnapshot, elapsed: float, seconds_remaining: float) -> None:
         self._no_signal_reason = ""
         if not self._strategy_mode_iy2():
@@ -4118,6 +4200,7 @@ class Btc15RedeemEngine:
         current_total_shares = local_up_shares + local_down_shares
         current_dom_ratio = self._iy2_dominant_ratio(local_up_shares, local_down_shares) if current_total_shares > 0 else 0.5
         current_dominant_side = self._iy2_dominant_side(local_up_shares, local_down_shares)
+        current_weak_side = self._iy2_weak_side_name(local_up_shares, local_down_shares, local_up_cost, local_down_cost)
         best_candidate: tuple[float, float, str, int] | None = None
         required_side = self._iy2_required_repair_side(local_up_shares, local_down_shares)
 
@@ -4125,8 +4208,6 @@ class Btc15RedeemEngine:
             if required_side is not None and side_label != required_side:
                 continue
             if (elapsed - self._iy2_last_fail_elapsed.get(side_label, -10_000.0)) < fail_cooldown:
-                continue
-            if self._iy2_last_filled_side == side_label:
                 continue
             if ref <= 0:
                 continue
@@ -4189,14 +4270,33 @@ class Btc15RedeemEngine:
                 bootstrap_ok = (total_cost <= 0 and side_missing and target_catchup and price_ok) or (
                     total_cost > 0 and current_total_shares > 0 and side_missing and target_catchup and price_ok
                 )
-                if total_cost > 0 and not side_missing and min(next_up_roi, next_down_roi) <= current_min_roi + 1e-9:
+                cheap_accum_ok = (
+                    total_cost > 0
+                    and not side_missing
+                    and side_label == current_weak_side
+                    and self._iy2_cheap_accumulation_override(
+                        current_up_shares=local_up_shares,
+                        current_down_shares=local_down_shares,
+                        current_up_cost=local_up_cost,
+                        current_down_cost=local_down_cost,
+                        side_label=side_label,
+                        fill_price=ref,
+                        shares=shares,
+                        target_avg=target_avg,
+                        cheap_buffer=cheap_buffer,
+                        weak_roi_floor=float(target.get("weak_roi_floor", 0.0) or 0.0),
+                    )
+                )
+                if total_cost > 0 and not side_missing and min(next_up_roi, next_down_roi) <= current_min_roi + 1e-9 and not cheap_accum_ok:
                     continue
-                if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok:
+                if next_dom_ratio > dominant_ratio_hard and not bootstrap_ok and not cheap_accum_ok:
                     continue
-                if worsens_floor or lopsided_worsens or dominant_chase:
+                if ((worsens_floor or lopsided_worsens) and not cheap_accum_ok) or dominant_chase:
                     continue
                 situation_gain = (min(next_up_roi, next_down_roi) - current_min_roi) - max(0.0, next_dom_ratio - current_dom_ratio)
-                if improvement >= improvement_min and (price_ok or risk_improves or target_catchup or bootstrap_ok):
+                if (
+                    improvement >= improvement_min and (price_ok or risk_improves or target_catchup or bootstrap_ok)
+                ) or cheap_accum_ok:
                     if best_candidate is None or (situation_gain, improvement) > (best_candidate[0], best_candidate[1]):
                         best_candidate = (situation_gain, improvement, side_label, shares)
 
@@ -4402,7 +4502,25 @@ class Btc15RedeemEngine:
                 limit_price,
                 shares,
             )
-            if current_total_cost > 0 and not side_missing and projected_worst_roi <= current_worst_roi + 1e-9:
+            target = self._iy2_wallet_bucket_target(
+                min(max(int(elapsed // 30), 0), 29),
+                max(1.0, float(self._window_budget_usdc or self.config.strategy_budget_cap_usdc)),
+            )
+            cheap_buffer = float(self._iy2_params.get("cheap_buffer", 0.03) or 0.03)
+            target_avg = float(target["avg_up_target"] if candidate.side_label == "UP" else target["avg_down_target"])
+            cheap_accum_ok = self._iy2_cheap_accumulation_override(
+                current_up_shares=current_up_shares,
+                current_down_shares=current_down_shares,
+                current_up_cost=current_up_cost,
+                current_down_cost=current_down_cost,
+                side_label=candidate.side_label,
+                fill_price=limit_price,
+                shares=shares,
+                target_avg=target_avg,
+                cheap_buffer=cheap_buffer,
+                weak_roi_floor=float(target.get("weak_roi_floor", 0.0) or 0.0),
+            )
+            if current_total_cost > 0 and not side_missing and projected_worst_roi <= current_worst_roi + 1e-9 and not cheap_accum_ok:
                 self._no_signal_reason = "iy2 buy does not improve worst-case roi"
                 return False
 

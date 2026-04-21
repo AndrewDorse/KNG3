@@ -1,0 +1,250 @@
+{
+  "slug": "btc-updown-15m-1775441700",
+  "prices_csv": "C:\\Users\\Lenovo\\Documents\\Git\\kng_bot3\\exports\\window_price_snapshots_public\\20260406_051501_btc-updown-15m-1775441700_prices.csv",
+  "profit_lock_min_shares_per_side": 20.0,
+  "roi_lock_min_each": 0.10,
+  "pair_only": true,
+  "target_min_roi": 0.05,
+  "budget_usdc": 10000.0,
+  "spent_usdc": 123.79999999999998,
+  "locked": false,
+  "lock_reason": "",
+  "final": {
+    "size_up": 130.0,
+    "size_down": 130.0,
+    "avg_up": 0.5542307692307693,
+    "avg_down": 0.39807692307692305,
+    "spent_usdc": 123.79999999999998,
+    "pnl_if_up_usdc": 6.199999999999989,
+    "pnl_if_down_usdc": 6.199999999999989,
+    "roi_up": 0.05008077544426485,
+    "roi_dn": 0.05008077544426485
+  },
+  "trade_count": 28,
+  "trades": [
+    {
+      "elapsed_sec": 0,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.4,
+      "notional": 4.0,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 0,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.53,
+      "notional": 5.300000000000001,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 1,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.4,
+      "notional": 4.0,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 1,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.53,
+      "notional": 5.300000000000001,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 2,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.46,
+      "notional": 4.6000000000000005,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 2,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.53,
+      "notional": 5.300000000000001,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 57,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.42,
+      "notional": 4.2,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 57,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.53,
+      "notional": 5.300000000000001,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 58,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.42,
+      "notional": 4.2,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 58,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.53,
+      "notional": 5.300000000000001,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 81,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.51,
+      "notional": 5.1,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 81,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.42,
+      "notional": 4.2,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 82,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.51,
+      "notional": 5.1,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 82,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.42,
+      "notional": 4.2,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 84,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.58,
+      "notional": 5.8,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 84,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.41,
+      "notional": 4.1,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 85,
+      "side": "up",
+      "shares": 5.0,
+      "price": 0.59,
+      "notional": 2.9499999999999997,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 85,
+      "side": "down",
+      "shares": 5.0,
+      "price": 0.4,
+      "notional": 2.0,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 255,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.68,
+      "notional": 6.800000000000001,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 255,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.23,
+      "notional": 2.3000000000000003,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 256,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.68,
+      "notional": 6.800000000000001,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 256,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.23,
+      "notional": 2.3000000000000003,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 257,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.78,
+      "notional": 7.800000000000001,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 257,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.21,
+      "notional": 2.1,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 260,
+      "side": "up",
+      "shares": 10.0,
+      "price": 0.78,
+      "notional": 7.800000000000001,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 260,
+      "side": "down",
+      "shares": 10.0,
+      "price": 0.21,
+      "notional": 2.1,
+      "reason": "pair_dn"
+    },
+    {
+      "elapsed_sec": 647,
+      "side": "up",
+      "shares": 5.0,
+      "price": 0.58,
+      "notional": 2.9,
+      "reason": "pair_up"
+    },
+    {
+      "elapsed_sec": 647,
+      "side": "down",
+      "shares": 5.0,
+      "price": 0.39,
+      "notional": 1.9500000000000002,
+      "reason": "pair_dn"
+    }
+  ]
+}

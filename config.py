@@ -7,6 +7,7 @@ import csv
 import json
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,6 +31,33 @@ class BotConfigError(RuntimeError):
     pass
 
 
+def _strip_env_copy_artifacts(value: str) -> str:
+    """Remove stray prefixes from pasted env values (e.g. `.git0x...` from a broken .env line)."""
+    s = value.strip().strip('"').strip("'")
+    if s.startswith(".git") and s[4:].strip().lower().startswith("0x"):
+        LOGGER.warning(
+            "Stripped stray '.git' prefix from an address/env value — fix your .env (duplicate key or bad paste)."
+        )
+        s = s[4:].strip()
+    return s
+
+
+def _normalize_polymarket_funder(raw: str) -> str:
+    """POLY_FUNDER must be a checksummable 0x + 40 hex EVM address."""
+    s = _strip_env_copy_artifacts(raw)
+    if not s.startswith("0x"):
+        raise BotConfigError(
+            "POLY_FUNDER must be an Ethereum address starting with 0x. "
+            f"Check for typos or a stray prefix. Raw length={len(raw.strip())!r}."
+        )
+    if not re.fullmatch(r"0x[a-fA-F0-9]{40}", s):
+        raise BotConfigError(
+            "POLY_FUNDER must be exactly 0x plus 40 hexadecimal characters "
+            f"(42 chars total). After cleanup, got length {len(s)}. First chars: {s[:12]}…"
+        )
+    return s
+
+
 def _normalize_strategy_mode(raw: str | None) -> str:
     """Canonicalize strategy_mode so strategy aliases always match engine guards."""
     s = (raw or "iy2").strip().lower()
@@ -43,8 +71,12 @@ def _normalize_strategy_mode(raw: str | None) -> str:
         return "volume_scalp_up"
     if s in ("champ4_6s", "champ4", "champ4_live", "wallet_dual", "wallet_dual_live"):
         return "champ4_6s"
+    if s in ("paladin", "paladin_live", "paladin_pair"):
+        return "paladin"
     if s in ("iy2", "iy_2", "wallet_overlap", "wallet_overlap_live", "iy2_live"):
         return "iy2"
+    if s in ("iy3", "iy_3", "wallet_overlap_path", "wallet_overlap_path_live", "iy3_live"):
+        return "iy3"
     if "t10" in s:
         return s
     if "scalp" in s and "volume" in s:
@@ -103,8 +135,8 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
-    strategy_mode: str = "iy2"
+    # paladin | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
+    strategy_mode: str = "paladin"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_stop_offset: float = 0.05
@@ -125,6 +157,26 @@ class BotConfig:
     btc_perp15_sample_interval_seconds: float = 5.0
     # When T-remaining <= this, flatten any positive window position with a marketable sell (btc_perp15 only).
     btc_perp15_end_dump_seconds_remaining: float = 15.0
+    # CLOB market WebSocket (PALADIN / low-latency quotes) + FAK fill confirmation
+    polymarket_ws_enabled: bool = True
+    polymarket_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    polymarket_fak_confirm_get_order: bool = True
+    # PALADIN live (pair-only): marginal ROI gate on each symmetric add is often stricter than pair_sum_max.
+    # Empty-book approx: need (pm_u+pm_d) <= 1/(1+target_min_roi). At 3% => sum<=0.971; at 2% => sum<=0.980.
+    paladin_pair_sum_max: float = 1.0
+    paladin_target_min_roi: float = 0.05
+    paladin_heartbeat_seconds: float = 15.0
+    # Staggered pair: first FAK on cheaper side if mid <= this; complete pair when sum+ROI allow.
+    paladin_stagger_pair: bool = True
+    paladin_first_leg_max_px: float = 0.55
+    # Sim/live: if stagger 2nd leg waits longer than this (seconds after hedge-ready), buy at mid anyway.
+    paladin_stagger_hedge_force_after_seconds: float | None = 45.0
+    # Cap inventory per outcome side (None / <=0 = no cap).
+    paladin_max_shares_per_side: float | None = 40.0
+    # Live default 0 (no artificial delay). Use ~2 in replay/batch to mimic one fill per sim second.
+    paladin_cooldown_seconds: float = 0.0
+    # Per-leg clip cap when min leg >= 20 (pair_clip_candidates_dynamic upper bound).
+    paladin_dynamic_clip_cap: float = 10.0
 
     @property
     def window_size_seconds(self) -> int:
@@ -154,12 +206,13 @@ class BotConfig:
 
     @classmethod
     def from_env(cls) -> "BotConfig":
-        private_key = os.getenv("POLY_PRIVATE_KEY")
-        funder = os.getenv("POLY_FUNDER")
+        private_key = _strip_env_copy_artifacts(os.getenv("POLY_PRIVATE_KEY") or "")
+        funder_raw = os.getenv("POLY_FUNDER") or ""
         if not private_key:
             raise BotConfigError("POLY_PRIVATE_KEY is required.")
-        if not funder:
+        if not funder_raw.strip():
             raise BotConfigError("POLY_FUNDER is required.")
+        funder = _normalize_polymarket_funder(funder_raw)
 
         raw_prices = os.getenv("BOT_LADDER_PRICES", "")
         if raw_prices.strip():
@@ -177,7 +230,7 @@ class BotConfig:
             perp15_ladder = [0.44, 0.43, 0.40]
 
         return cls(
-            private_key=private_key,
+            private_key=private_key.strip(),
             funder=funder,
             bot_version=os.getenv("BOT_VERSION", "2026-04-15 19:10:00").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
@@ -223,7 +276,7 @@ class BotConfig:
             btc_feed_poll_seconds=_env_float("BOT_BTC_FEED_POLL_SECONDS", 1.0),
             btc_feed_symbol=os.getenv("BOT_BTC_FEED_SYMBOL", "BTCUSDT").upper(),
             signal_preset=os.getenv("BOT_SIGNAL_PRESET", "w1").strip().lower(),
-            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "iy2")),
+            strategy_mode=_normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "paladin")),
             volume_scalp_tp_offset=volume_scalp_tp_raw,
             volume_scalp_stop_offset=_env_float("BOT_VOLUME_SCALP_STOP_OFFSET", 0.05),
             volume_scalp_shares=max(1, _env_int("BOT_VOLUME_SCALP_SHARES", 6)),
@@ -241,6 +294,28 @@ class BotConfig:
             btc_perp15_tp_price=_env_float("BOT_PERP15_TP_PRICE", 0.99),
             btc_perp15_sample_interval_seconds=_env_float("BOT_PERP15_SAMPLE_INTERVAL_SECONDS", 5.0),
             btc_perp15_end_dump_seconds_remaining=max(1.0, _env_float("BOT_PERP15_END_DUMP_SECONDS_REMAINING", 15.0)),
+            polymarket_ws_enabled=_env_bool("BOT_POLY_WS_ENABLED", True),
+            polymarket_ws_url=os.getenv(
+                "BOT_POLY_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+            ).strip(),
+            polymarket_fak_confirm_get_order=_env_bool("BOT_POLY_FAK_CONFIRM_ORDER", True),
+            paladin_pair_sum_max=_env_float("BOT_PALADIN_PAIR_SUM_MAX", 1.0),
+            paladin_target_min_roi=_env_float("BOT_PALADIN_TARGET_MIN_ROI", 0.05),
+            paladin_heartbeat_seconds=max(5.0, _env_float("BOT_PALADIN_HEARTBEAT_SEC", 15.0)),
+            paladin_stagger_pair=_env_bool("BOT_PALADIN_STAGGER_PAIR", True),
+            paladin_first_leg_max_px=_env_float("BOT_PALADIN_FIRST_LEG_MAX_PX", 0.55),
+            paladin_stagger_hedge_force_after_seconds=(
+                None
+                if _env_float("BOT_PALADIN_STAGGER_HEDGE_FORCE_SEC", 45.0) <= 0
+                else _env_float("BOT_PALADIN_STAGGER_HEDGE_FORCE_SEC", 45.0)
+            ),
+            paladin_max_shares_per_side=(
+                None
+                if _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 40.0) <= 0
+                else _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 40.0)
+            ),
+            paladin_cooldown_seconds=max(0.0, _env_float("BOT_PALADIN_COOLDOWN_SEC", 0.0)),
+            paladin_dynamic_clip_cap=max(5.0, _env_float("BOT_PALADIN_DYNAMIC_CLIP_CAP", 10.0)),
         )
 
 

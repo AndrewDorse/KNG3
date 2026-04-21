@@ -26,6 +26,11 @@ The image copies only the files required for the live bot:
 - `signal_analyzer.py`
 - `http_session.py`
 
+It also copies PALADIN live support:
+
+- `polymarket_ws.py`, `clob_fak.py`, `paladin_live_engine.py`
+- `PALADIN/` (shared sim engine + `paladin_sim_config.json` for profit-lock params)
+
 It does not copy local logs, exports, virtualenv files, backups, or analysis scripts into the image.
 
 ## Hostinger Docker Manager
@@ -71,25 +76,18 @@ Recommended:
 ## Go live checklist
 
 1. Set secrets only in Hostinger env (never in Git).
-2. First deploy with `POLY_DRY_RUN=true`; confirm logs show market + BTC feed + `[STRATEGY PARAMS]` for `iy2`.
+2. First deploy with `POLY_DRY_RUN=true`; confirm logs show `PALADIN_pair_live_v1`, heartbeat lines, and WS status (or REST fallback).
 3. Set `POLY_DRY_RUN=false` to trade for real.
 
-## Strategy note (`iy2`)
+## Strategy note (default: `paladin`)
 
-The deployment example uses `BOT_STRATEGY_MODE=iy2`. Behavior:
+The deployment defaults to `BOT_STRATEGY_MODE=paladin`. Behavior:
 
-- Trade both sides using `5`-share lot rounding with notional-based legs
-- Core actions: base pair build, winner add, hedge, repair, maintenance pair, rebalance, safety, value, deep value
-- Entry params are loaded from `/app/strategy_params/iy2_summary.json`
-- Late stale-order hardening uses `BOT_STRATEGY_STALE_ORDER_SECONDS=8`
+- Pair-only FAK buys on BTC 15m up/down; optional CLOB market WebSocket for mids (`BOT_POLY_WS_*`)
+- Gates: pair sum cap, marginal ROI on the second leg, staggered first leg, optional hedge-force timer, per-side share cap
+- Tuning: `BOT_PALADIN_*` in `.env.example`; profit-lock thresholds in `/app/PALADIN/paladin_sim_config.json`
 
-Core tuning lives in `.env.example` under the regular `BOT_STRATEGY_*` vars.
-
-Poll-based BTC and CLOB only.
-
-`iy2` no longer depends on `/app/exports`; the params file is baked into the image at:
-
-- `/app/strategy_params/iy2_summary.json`
+Set `BOT_STRATEGY_MODE=iy2` to run the legacy overlap engine instead (params in `/app/strategy_params/iy2_summary.json`).
 
 ## Security
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from functools import wraps
 from typing import Any
@@ -74,6 +75,10 @@ class PolymarketTrader:
         self.client.set_api_creds(creds)
         LOGGER.info("API credentials set for funder: %s", config.funder)
 
+        # One taker pipeline at a time: FAK POST + confirm + retries must finish (or raise)
+        # before another marketable order is sent — avoids overlap when the CLOB is slow.
+        self._taker_order_lock = threading.Lock()
+
         # --- Token spending allowances (required before first trade) ---
         self._setup_allowances()
 
@@ -82,13 +87,24 @@ class PolymarketTrader:
     # ------------------------------------------------------------------
 
     def _setup_allowances(self) -> None:
-        """Set token spending allowances on the CLOB exchange contract.
-        Safe to call multiple times — if already approved, it's a no-op."""
+        """Sync USDC collateral allowance with the CLOB (newer SDK) or legacy on-chain setup."""
+        if hasattr(self.client, "set_allowances"):
+            try:
+                self.client.set_allowances(signature_type=self.config.signature_type)
+                LOGGER.info("Allowances set successfully (set_allowances)")
+                return
+            except Exception as exc:
+                LOGGER.warning("set_allowances failed, trying API sync: %s", exc)
         try:
-            self.client.set_allowances(signature_type=self.config.signature_type)
-            LOGGER.info("Allowances set successfully")
+            self.client.update_balance_allowance(
+                BalanceAllowanceParams(
+                    asset_type=AssetType.COLLATERAL,
+                    signature_type=self.config.signature_type,
+                )
+            )
+            LOGGER.info("Collateral balance/allowance synced (update_balance_allowance)")
         except Exception as exc:
-            LOGGER.warning("Allowance setup issue (may already be set): %s", exc)
+            LOGGER.warning("Allowance sync issue (may already be set on-chain): %s", exc)
 
     # ------------------------------------------------------------------
     # Balance checks
@@ -168,7 +184,6 @@ class PolymarketTrader:
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.GTC, post_only=post_only)
 
-    @_retry()
     def place_marketable_buy(
         self,
         token: TokenMarket,
@@ -178,6 +193,20 @@ class PolymarketTrader:
         fee_rate_bps: int | None = None,
     ) -> dict[str, Any]:
         """Place an aggressive buy intended to fill immediately."""
+        with self._taker_order_lock:
+            return self._place_marketable_buy_impl(
+                token, price, size, fee_rate_bps=fee_rate_bps
+            )
+
+    @_retry()
+    def _place_marketable_buy_impl(
+        self,
+        token: TokenMarket,
+        price: float,
+        size: int,
+        *,
+        fee_rate_bps: int | None = None,
+    ) -> dict[str, Any]:
         order_kwargs: dict[str, Any] = {
             "token_id": token.token_id,
             "price": round(price, 2),
@@ -189,6 +218,56 @@ class PolymarketTrader:
         order = OrderArgs(**order_kwargs)
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.FAK)
+
+    def place_marketable_buy_with_result(
+        self,
+        token: TokenMarket,
+        price: float,
+        size: int,
+        *,
+        confirm_get_order: bool = True,
+        fee_rate_bps: int | None = None,
+    ) -> Any:
+        """Submit FAK buy; parse POST body and optionally confirm fill via GET /order."""
+        with self._taker_order_lock:
+            return self._place_marketable_buy_with_result_impl(
+                token,
+                price,
+                size,
+                confirm_get_order=confirm_get_order,
+                fee_rate_bps=fee_rate_bps,
+            )
+
+    @_retry()
+    def _place_marketable_buy_with_result_impl(
+        self,
+        token: TokenMarket,
+        price: float,
+        size: int,
+        *,
+        confirm_get_order: bool = True,
+        fee_rate_bps: int | None = None,
+    ) -> Any:
+        from clob_fak import fak_buy_with_confirm
+
+        order_kwargs: dict[str, Any] = {
+            "token_id": token.token_id,
+            "price": round(price, 2),
+            "size": float(size),
+            "side": BUY,
+        }
+        if fee_rate_bps is not None:
+            order_kwargs["fee_rate_bps"] = fee_rate_bps
+        order = OrderArgs(**order_kwargs)
+        signed = self.client.create_order(order)
+        raw = self.client.post_order(signed, OrderType.FAK)
+        return fak_buy_with_confirm(
+            self.client.get_order,
+            raw,
+            requested_shares=size,
+            limit_price=float(price),
+            confirm=confirm_get_order,
+        )
 
     @_retry()
     def place_limit_sell(
@@ -210,7 +289,6 @@ class PolymarketTrader:
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.GTC)
 
-    @_retry()
     def place_marketable_sell(
         self, token: TokenMarket, price: float, size: float
     ) -> dict[str, Any]:
@@ -218,6 +296,13 @@ class PolymarketTrader:
 
         Uses FAK so small cleanup leftovers do not remain resting on the book.
         """
+        with self._taker_order_lock:
+            return self._place_marketable_sell_impl(token, price, size)
+
+    @_retry()
+    def _place_marketable_sell_impl(
+        self, token: TokenMarket, price: float, size: float
+    ) -> dict[str, Any]:
         order = OrderArgs(
             token_id=token.token_id,
             price=round(price, 2),
