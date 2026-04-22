@@ -407,11 +407,34 @@ class PaladinLiveEngine:
             cooldown_seconds=float(self.config.paladin_cooldown_seconds),
             dynamic_clip_cap=float(self.config.paladin_dynamic_clip_cap),
             pair_size_pick="max_feasible",
+            min_elapsed_for_flat_open=int(self.config.strategy_entry_delay_seconds),
             try_buy_fn=try_buy_fn,
             pair_sum_tighten_per_fill=float(self.config.paladin_pair_sum_tighten_per_fill),
             pair_sum_min_floor=float(self.config.paladin_pair_sum_min_floor),
             pending_hedge_bypass_imbalance_shares=self.config.paladin_pending_hedge_bypass_imbalance_shares,
             discipline_relax_after_forced_sec=self.config.paladin_discipline_relax_after_forced_sec,
+            second_leg_book_improve_eps=float(self.config.paladin_second_leg_book_improve_eps),
+            max_blended_pair_avg_sum=self.config.paladin_max_blended_pair_avg_sum,
+            stagger_winning_side_first_when_position=bool(
+                self.config.paladin_stagger_winning_side_first_when_position
+            ),
+            stagger_symmetric_fallback_when_balanced=bool(
+                self.config.paladin_stagger_symmetric_fallback_when_balanced
+            ),
+            stagger_symmetric_fallback_roi_discount=float(
+                self.config.paladin_stagger_symmetric_fallback_roi_discount
+            ),
+            stagger_symmetric_fallback_skip_first_leg_blend_cap=bool(
+                self.config.paladin_stagger_symmetric_fallback_skip_first_leg_blend_cap
+            ),
+            stagger_alternate_first_leg_when_balanced=bool(
+                self.config.paladin_stagger_alternate_first_leg_when_balanced
+            ),
+            min_elapsed_between_pair_starts=self.config.paladin_min_elapsed_between_pair_starts,
+            entry_trailing_min_low_seconds=self.config.paladin_entry_trailing_min_low_seconds,
+            entry_trailing_low_slippage=float(
+                self.config.paladin_entry_trailing_low_slippage
+            ),
         )
         if stopped:
             m = runner.st.snapshot_metrics()

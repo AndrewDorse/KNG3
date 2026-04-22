@@ -42,7 +42,7 @@ def main() -> int:
     elif config.strategy_mode == "signal_only":
         LOGGER.info("signal_preset= %s", config.signal_preset)
     elif config.strategy_mode == "paladin":
-        LOGGER.info("strategy_id  = %s", "PALADIN_pair_live_v1")
+        LOGGER.info("strategy_id  = %s", "PALADIN_pair_live_v3")
         LOGGER.info("poly_ws      = %s (%s)", config.polymarket_ws_enabled, config.polymarket_ws_url)
         LOGGER.info("fak_confirm  = %s (GET /order after FAK when needed)", config.polymarket_fak_confirm_get_order)
         LOGGER.info(
@@ -65,6 +65,23 @@ def main() -> int:
             config.paladin_pair_sum_min_floor,
             config.paladin_pending_hedge_bypass_imbalance_shares,
             config.paladin_discipline_relax_after_forced_sec,
+        )
+        LOGGER.info(
+            "paladin_v3    = second_leg_book_eps=%.4f max_blended_avg_sum=%s "
+            "stagger_win_first=%s sym_fallback_balanced=%s",
+            config.paladin_second_leg_book_improve_eps,
+            config.paladin_max_blended_pair_avg_sum,
+            config.paladin_stagger_winning_side_first_when_position,
+            config.paladin_stagger_symmetric_fallback_when_balanced,
+        )
+        tr = config.paladin_entry_trailing_min_low_seconds
+        LOGGER.info(
+            "paladin_ladder= min_gap_between_pairs=%s trail_low_sec=%s entry_slip=%.3f "
+            "alternate_first_when_balanced=%s",
+            config.paladin_min_elapsed_between_pair_starts,
+            tr if tr is not None else "off",
+            float(config.paladin_entry_trailing_low_slippage),
+            config.paladin_stagger_alternate_first_leg_when_balanced,
         )
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)

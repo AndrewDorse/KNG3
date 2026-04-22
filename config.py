@@ -164,25 +164,40 @@ class BotConfig:
     # PALADIN live (pair-only): marginal ROI gate on each symmetric add is often stricter than pair_sum_max.
     # Empty-book approx: need (pm_u+pm_d) <= 1/(1+target_min_roi). At 3% => sum<=0.971; at 2% => sum<=0.980.
     paladin_pair_sum_max: float = 1.0
-    paladin_target_min_roi: float = 0.05
+    # Calibrated ladder (PALADIN/calibrate_ladder_wallet_windows.py): target_min_roi=0 matches 100-window sim.
+    paladin_target_min_roi: float = 0.0
     paladin_heartbeat_seconds: float = 15.0
     # Staggered pair: first FAK on cheaper side if mid <= this; complete pair when sum+ROI allow.
     paladin_stagger_pair: bool = True
     paladin_first_leg_max_px: float = 0.55
     # Sim/live: if stagger 2nd leg waits longer than this (seconds after hedge-ready), buy at mid anyway.
     paladin_stagger_hedge_force_after_seconds: float | None = 45.0
-    # Cap inventory per outcome side (None / <=0 = no cap).
-    paladin_max_shares_per_side: float | None = 40.0
+    # Cap inventory per outcome side (None / <=0 = no cap). PALADIN v3 live default: 10/side (calibrated grid).
+    paladin_max_shares_per_side: float | None = 10.0
     # Live default 0 (no artificial delay). Use ~2 in replay/batch to mimic one fill per sim second.
     paladin_cooldown_seconds: float = 0.0
     # Per-leg clip cap when min leg >= 20 (pair_clip_candidates_dynamic upper bound).
-    paladin_dynamic_clip_cap: float = 10.0
-    # Price discipline (batch-tuned “balanced” profile): tighten pair-sum cap per fill; relax pending hedge
-    # when |imb| >= bypass shares or after force timer + relax seconds. (0.0035 also ties in sim; default 0.004.)
-    paladin_pair_sum_tighten_per_fill: float = 0.004
+    paladin_dynamic_clip_cap: float = 12.0
+    # 0.0 matches ladder calibration; >0 tightens effective pair_sum after each fill.
+    paladin_pair_sum_tighten_per_fill: float = 0.0
     paladin_pair_sum_min_floor: float = 0.90
     paladin_pending_hedge_bypass_imbalance_shares: float | None = 10.0
     paladin_discipline_relax_after_forced_sec: float | None = 60.0
+    # PALADIN v3 (strategy_cycle baseline_v3): stricter second-leg vs book; cap avg_up+avg_down after one-leg adds.
+    paladin_second_leg_book_improve_eps: float = 0.013
+    paladin_max_blended_pair_avg_sum: float | None = 1.03
+    # If True, new stagger first leg (when already holding UP or DOWN) only on higher-mid side.
+    paladin_stagger_winning_side_first_when_position: bool = False
+    # When win-side stagger blocks and inventory is balanced, add symmetric pair if ROI/sum gates pass.
+    paladin_stagger_symmetric_fallback_when_balanced: bool = True
+    paladin_stagger_symmetric_fallback_roi_discount: float = 0.03
+    paladin_stagger_symmetric_fallback_skip_first_leg_blend_cap: bool = True
+    # Causal ladder: alternate UP/DN first leg when balanced; pace pair starts; optional trailing dip filter.
+    # PALADIN v3 (100 recent windows, max 10/side): gap=100s, no trailing, slip=0.02 (see exports/*max10*.csv).
+    paladin_stagger_alternate_first_leg_when_balanced: bool = True
+    paladin_min_elapsed_between_pair_starts: float | None = 100.0
+    paladin_entry_trailing_min_low_seconds: int | None = None
+    paladin_entry_trailing_low_slippage: float = 0.02
 
     @property
     def window_size_seconds(self) -> int:
@@ -238,7 +253,7 @@ class BotConfig:
         return cls(
             private_key=private_key.strip(),
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "2026-04-15 19:10:00").strip(),
+            bot_version=os.getenv("BOT_VERSION", "paladin-v3-10sh-2026-04-21").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),
@@ -306,7 +321,7 @@ class BotConfig:
             ).strip(),
             polymarket_fak_confirm_get_order=_env_bool("BOT_POLY_FAK_CONFIRM_ORDER", True),
             paladin_pair_sum_max=_env_float("BOT_PALADIN_PAIR_SUM_MAX", 1.0),
-            paladin_target_min_roi=_env_float("BOT_PALADIN_TARGET_MIN_ROI", 0.05),
+            paladin_target_min_roi=_env_float("BOT_PALADIN_TARGET_MIN_ROI", 0.0),
             paladin_heartbeat_seconds=max(5.0, _env_float("BOT_PALADIN_HEARTBEAT_SEC", 15.0)),
             paladin_stagger_pair=_env_bool("BOT_PALADIN_STAGGER_PAIR", True),
             paladin_first_leg_max_px=_env_float("BOT_PALADIN_FIRST_LEG_MAX_PX", 0.55),
@@ -317,13 +332,13 @@ class BotConfig:
             ),
             paladin_max_shares_per_side=(
                 None
-                if _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 40.0) <= 0
-                else _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 40.0)
+                if _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 10.0) <= 0
+                else _env_float("BOT_PALADIN_MAX_SHARES_PER_SIDE", 10.0)
             ),
             paladin_cooldown_seconds=max(0.0, _env_float("BOT_PALADIN_COOLDOWN_SEC", 0.0)),
-            paladin_dynamic_clip_cap=max(5.0, _env_float("BOT_PALADIN_DYNAMIC_CLIP_CAP", 10.0)),
+            paladin_dynamic_clip_cap=max(5.0, _env_float("BOT_PALADIN_DYNAMIC_CLIP_CAP", 12.0)),
             paladin_pair_sum_tighten_per_fill=max(
-                0.0, _env_float("BOT_PALADIN_PAIR_SUM_TIGHTEN_PER_FILL", 0.004)
+                0.0, _env_float("BOT_PALADIN_PAIR_SUM_TIGHTEN_PER_FILL", 0.0)
             ),
             paladin_pair_sum_min_floor=max(
                 0.80, min(0.999, _env_float("BOT_PALADIN_PAIR_SUM_MIN_FLOOR", 0.90))
@@ -337,6 +352,42 @@ class BotConfig:
                 None
                 if _env_float("BOT_PALADIN_DISCIPLINE_RELAX_AFTER_FORCE_SEC", 60.0) <= 0
                 else _env_float("BOT_PALADIN_DISCIPLINE_RELAX_AFTER_FORCE_SEC", 60.0)
+            ),
+            paladin_second_leg_book_improve_eps=max(
+                0.0, _env_float("BOT_PALADIN_SECOND_LEG_BOOK_IMPROVE_EPS", 0.013)
+            ),
+            paladin_max_blended_pair_avg_sum=(
+                None
+                if _env_float("BOT_PALADIN_MAX_BLENDED_PAIR_AVG_SUM", 1.03) <= 0
+                else _env_float("BOT_PALADIN_MAX_BLENDED_PAIR_AVG_SUM", 1.03)
+            ),
+            paladin_stagger_winning_side_first_when_position=_env_bool(
+                "BOT_PALADIN_STAGGER_WINNING_SIDE_FIRST_WHEN_POSITION", False
+            ),
+            paladin_stagger_symmetric_fallback_when_balanced=_env_bool(
+                "BOT_PALADIN_STAGGER_SYMMETRIC_FALLBACK_WHEN_BALANCED", True
+            ),
+            paladin_stagger_symmetric_fallback_roi_discount=_env_float(
+                "BOT_PALADIN_STAGGER_SYMMETRIC_FALLBACK_ROI_DISCOUNT", 0.03
+            ),
+            paladin_stagger_symmetric_fallback_skip_first_leg_blend_cap=_env_bool(
+                "BOT_PALADIN_STAGGER_SYMMETRIC_FALLBACK_SKIP_FIRST_BLEND", True
+            ),
+            paladin_stagger_alternate_first_leg_when_balanced=_env_bool(
+                "BOT_PALADIN_STAGGER_ALTERNATE_FIRST_WHEN_BALANCED", True
+            ),
+            paladin_min_elapsed_between_pair_starts=(
+                None
+                if _env_float("BOT_PALADIN_MIN_ELAPSED_BETWEEN_PAIR_STARTS", 100.0) < 0
+                else _env_float("BOT_PALADIN_MIN_ELAPSED_BETWEEN_PAIR_STARTS", 100.0)
+            ),
+            paladin_entry_trailing_min_low_seconds=(
+                None
+                if _env_int("BOT_PALADIN_ENTRY_TRAILING_MIN_LOW_SEC", -1) < 0
+                else _env_int("BOT_PALADIN_ENTRY_TRAILING_MIN_LOW_SEC", -1)
+            ),
+            paladin_entry_trailing_low_slippage=_env_float(
+                "BOT_PALADIN_ENTRY_TRAILING_LOW_SLIPPAGE", 0.02
             ),
         )
 
