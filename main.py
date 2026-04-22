@@ -46,8 +46,9 @@ def main() -> int:
         LOGGER.info("poly_ws      = %s (%s)", config.polymarket_ws_enabled, config.polymarket_ws_url)
         LOGGER.info("fak_confirm  = %s (GET /order after FAK when needed)", config.polymarket_fak_confirm_get_order)
         LOGGER.info(
-            "paladin_pair = sum<=%.3f | min_marginal_roi=%.3f (2nd leg; 1st leg mid<=%.3f)",
+            "paladin_pair = sum<=%.3f (on_force<=%s) | min_marginal_roi=%.3f (2nd leg; 1st leg mid<=%.3f)",
             config.paladin_pair_sum_max,
+            config.paladin_pair_sum_max_on_forced_hedge,
             config.paladin_target_min_roi,
             config.paladin_first_leg_max_px,
         )

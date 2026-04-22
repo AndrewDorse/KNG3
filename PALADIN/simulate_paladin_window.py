@@ -645,6 +645,7 @@ def paladin_step(
     entry_trailing_min_low_seconds: int | None = None,
     entry_trailing_low_slippage: float = 0.02,
     second_leg_must_improve_leg_avg: bool = False,
+    pair_sum_max_on_forced_hedge: float | None = None,
 ) -> bool:
     """Advance PALADIN by one simulated second. Returns True if profit-lock stopped trading."""
     st = runner.st
@@ -756,7 +757,15 @@ def paladin_step(
                 )
             )
             if discipline_force:
-                if pm_u + pm_d > eff_sum_max + 1e-9:
+                forced_sum_cap = float(eff_sum_max)
+                if (
+                    pair_sum_max_on_forced_hedge is not None
+                    and float(pair_sum_max_on_forced_hedge) > 0
+                ):
+                    forced_sum_cap = max(
+                        forced_sum_cap, min(1.0, float(pair_sum_max_on_forced_hedge))
+                    )
+                if pm_u + pm_d > forced_sum_cap + 1e-9:
                     return False
                 if (
                     second_leg_book_improve_eps > 0
@@ -936,6 +945,8 @@ def paladin_step(
                 side_opts = stagger_first_leg_candidates(pm_u, pm_d, single_leg_max_px)
 
             if not side_opts:
+                return False
+            if pair_px > eff_sum_max + 1e-9:
                 return False
             sh_use = 0.0
             for cand in cands:
@@ -1204,6 +1215,7 @@ def run_window(
     entry_trailing_min_low_seconds: int | None = None,
     entry_trailing_low_slippage: float = 0.02,
     second_leg_must_improve_leg_avg: bool = False,
+    pair_sum_max_on_forced_hedge: float | None = None,
 ) -> SimState:
     runner = PaladinPairRunner()
     for t, (pm_u, pm_d) in enumerate(prices):
@@ -1244,6 +1256,7 @@ def run_window(
             entry_trailing_min_low_seconds=entry_trailing_min_low_seconds,
             entry_trailing_low_slippage=entry_trailing_low_slippage,
             second_leg_must_improve_leg_avg=second_leg_must_improve_leg_avg,
+            pair_sum_max_on_forced_hedge=pair_sum_max_on_forced_hedge,
         ):
             break
     return runner.st

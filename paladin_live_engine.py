@@ -398,6 +398,7 @@ class PaladinLiveEngine:
             budget_usdc=float(self.config.strategy_budget_cap_usdc),
             params=self._params,
             pair_sum_max=pair_max,
+            pair_sum_max_on_forced_hedge=self.config.paladin_pair_sum_max_on_forced_hedge,
             single_leg_max_px=float(self.config.paladin_first_leg_max_px),
             pair_only=True,
             stagger_pair_entry=bool(self.config.paladin_stagger_pair),
