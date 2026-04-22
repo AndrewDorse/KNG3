@@ -105,6 +105,11 @@ class PaladinV7LiveEngine:
         self._sec_btc_vol: list[float] = [0.0] * config.window_size_seconds
         self._last_hb_ts: float = 0.0
         self._last_missing_price_log_ts: float = 0.0
+        self._last_reconcile_ts: float = 0.0
+        self._reconcile_mismatch_count: int = 0
+        self._last_flatten_ts: float = 0.0
+        self._v7_window_reconcile_applies: int = 0
+        self._v7_window_flatten_fills: int = 0
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -132,6 +137,14 @@ class PaladinV7LiveEngine:
             float(self.config.paladin_v7_clip_shares),
             float(self.config.paladin_v7_max_shares_per_side),
             int(self.config.paladin_v7_max_orders),
+        )
+        LOGGER.info(
+            "PALADIN v7 reconcile | enabled=%s every=%.1fs tol=%.2f sh confirm_reads=%d flatten=%s",
+            self.config.paladin_v7_reconcile_enabled,
+            float(self.config.paladin_v7_reconcile_interval_seconds),
+            float(self.config.paladin_v7_reconcile_share_tolerance),
+            int(self.config.paladin_v7_reconcile_confirm_reads),
+            self.config.paladin_v7_reconcile_flatten,
         )
         while not self._stop:
             self._loop_once()
@@ -263,6 +276,184 @@ class PaladinV7LiveEngine:
         )
         return filled
 
+    @staticmethod
+    def _shrink_leg(st: SimState, side: str, remove: float) -> None:
+        remove = max(0.0, float(remove))
+        if remove <= 1e-12:
+            return
+        if side == "up":
+            st.size_up = max(0.0, float(st.size_up) - remove)
+            if st.size_up < 1e-9:
+                st.size_up, st.avg_up = 0.0, 0.0
+        else:
+            st.size_down = max(0.0, float(st.size_down) - remove)
+            if st.size_down < 1e-9:
+                st.size_down, st.avg_down = 0.0, 0.0
+
+    def _sync_state_to_api_balances(
+        self,
+        runner: PaladinV7Runner,
+        api_u: float,
+        api_d: float,
+        pm_u: float,
+        pm_d: float,
+        elapsed: int,
+    ) -> None:
+        """Align SimState sizes (and spend on positive deltas) with CLOB conditional balances."""
+        st = runner.st
+        for side, api_sz, pm in (("up", api_u, pm_u), ("down", api_d, pm_d)):
+            cur = float(st.size_up) if side == "up" else float(st.size_down)
+            delta = float(api_sz) - cur
+            if abs(delta) <= 1e-9:
+                continue
+            if delta > 0:
+                su, au, sd, ad = apply_buy_fill(
+                    st.size_up,
+                    st.avg_up,
+                    st.size_down,
+                    st.avg_down,
+                    side=side,  # type: ignore[arg-type]
+                    add_shares=delta,
+                    fill_price=float(pm),
+                )
+                st.size_up, st.avg_up, st.size_down, st.avg_down = su, au, sd, ad
+                notion = float(delta) * float(pm)
+                st.spent_usdc += notion
+                st.trades.append(
+                    Trade(
+                        elapsed,
+                        side,  # type: ignore[arg-type]
+                        float(delta),
+                        float(pm),
+                        notion,
+                        "v7_api_reconcile_sync",
+                    )
+                )
+                LOGGER.warning(
+                    "PALADIN v7 reconcile SYNC +%.4f %s sh @ %.4f (~$%.2f) to match API",
+                    delta,
+                    side,
+                    float(pm),
+                    notion,
+                )
+            else:
+                self._shrink_leg(st, side, -delta)
+                LOGGER.warning(
+                    "PALADIN v7 reconcile TRIM %.4f %s sh (model ahead of API)",
+                    -delta,
+                    side,
+                )
+
+    def _maybe_flatten_inventory(
+        self,
+        contract: ActiveContract,
+        runner: PaladinV7Runner,
+        pm_u: float,
+        pm_d: float,
+        now: float,
+        elapsed: int,
+    ) -> None:
+        if not self.config.paladin_v7_reconcile_flatten:
+            return
+        if now - self._last_flatten_ts < float(self.config.paladin_v7_reconcile_flatten_cooldown_seconds):
+            return
+        st = runner.st
+        imb = float(st.size_up) - float(st.size_down)
+        tol = float(self.config.paladin_v7_reconcile_flatten_min_imbalance)
+        if abs(imb) <= tol:
+            return
+        lighter = "down" if imb > 0 else "up"
+        px = float(pm_d) if imb > 0 else float(pm_u)
+        cap = float(self.config.paladin_v7_max_shares_per_side)
+        cur_light = float(st.size_down) if imb > 0 else float(st.size_up)
+        room = max(0.0, cap - cur_light)
+        need = abs(imb)
+        clip = float(self.config.paladin_v7_clip_shares)
+        sh = float(min(need, clip, room))
+        if sh < float(self.config.paladin_v7_min_shares) - 1e-9:
+            LOGGER.info(
+                "PALADIN v7 flatten skip: need=%.3f room=%.3f below min_shares",
+                need,
+                room,
+            )
+            return
+        budget = float(self.config.strategy_budget_cap_usdc)
+        filled = self._live_buy(
+            contract,
+            st,
+            t=elapsed,
+            side=lighter,
+            shares=sh,
+            px=px,
+            reason="v7_api_imbalance_flatten",
+            budget=budget,
+            min_notional=float(self.config.paladin_v7_min_notional),
+            min_shares=float(self.config.paladin_v7_min_shares),
+        )
+        if filled > 1e-9:
+            self._last_flatten_ts = now
+            self._v7_window_flatten_fills += 1
+            LOGGER.warning(
+                "PALADIN v7 flatten FAK | bought %s %.4f @ %.4f (imb was %.3f)",
+                lighter.upper(),
+                filled,
+                px,
+                imb,
+            )
+
+    def _maybe_reconcile_and_flatten(
+        self,
+        contract: ActiveContract,
+        runner: PaladinV7Runner,
+        pm_u: float,
+        pm_d: float,
+        now: float,
+        elapsed: int,
+    ) -> None:
+        if not self.config.paladin_v7_reconcile_enabled:
+            return
+        if now - self._last_reconcile_ts < float(self.config.paladin_v7_reconcile_interval_seconds):
+            return
+        self._last_reconcile_ts = now
+
+        api_u = float(self.trader.token_balance_allowance_refreshed(contract.up.token_id))
+        api_d = float(self.trader.token_balance_allowance_refreshed(contract.down.token_id))
+        st = runner.st
+        tol = float(self.config.paladin_v7_reconcile_share_tolerance)
+        du = abs(api_u - float(st.size_up))
+        dd = abs(api_d - float(st.size_down))
+        mismatch = du > tol or dd > tol
+        if mismatch:
+            self._reconcile_mismatch_count += 1
+            LOGGER.info(
+                "PALADIN v7 reconcile | model U=%.4f D=%.4f | API U=%.4f D=%.4f | "
+                "|dU|=%.3f |dD|=%.3f | streak=%d/%d",
+                st.size_up,
+                st.size_down,
+                api_u,
+                api_d,
+                du,
+                dd,
+                self._reconcile_mismatch_count,
+                int(self.config.paladin_v7_reconcile_confirm_reads),
+            )
+        else:
+            self._reconcile_mismatch_count = 0
+            return
+
+        if self._reconcile_mismatch_count < int(self.config.paladin_v7_reconcile_confirm_reads):
+            return
+
+        self._reconcile_mismatch_count = 0
+        LOGGER.warning(
+            "PALADIN v7 reconcile: applying API balances (confirmed %d reads)",
+            int(self.config.paladin_v7_reconcile_confirm_reads),
+        )
+        self._v7_window_reconcile_applies += 1
+        self._sync_state_to_api_balances(runner, api_u, api_d, pm_u, pm_d, elapsed)
+        runner.pending_second = None
+        self._maybe_flatten_inventory(contract, runner, pm_u, pm_d, now, elapsed)
+
     def _loop_once(self) -> None:
         contract = self.locator.get_active_contract()
         if contract is None:
@@ -285,6 +476,11 @@ class PaladinV7LiveEngine:
             self._force_exit_warned_slug = None
             self._entry_delay_warned_slug = None
             self._new_cutoff_warned_slug = None
+            self._last_reconcile_ts = 0.0
+            self._reconcile_mismatch_count = 0
+            self._last_flatten_ts = 0.0
+            self._v7_window_reconcile_applies = 0
+            self._v7_window_flatten_fills = 0
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
                 self._ws.set_assets([contract.up.token_id, contract.down.token_id])
@@ -348,6 +544,8 @@ class PaladinV7LiveEngine:
         self._sec_btc_px[elapsed] = float(btc_point.price)
         self._sec_btc_vol[elapsed] += bv
 
+        self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
+
         entry_delay = int(self.config.strategy_entry_delay_seconds)
         if elapsed < entry_delay and pend is None:
             if self._entry_delay_warned_slug != slug:
@@ -381,7 +579,8 @@ class PaladinV7LiveEngine:
             LOGGER.info(
                 "PALADIN v7 hb | %s | el=%ds left=%.0fs | mid_up=%.4f mid_dn=%.4f | "
                 "btc=%.2f vol+%.4f/sum_el | spent=$%.2f | U=%.2f@%.3f D=%.2f@%.3f | "
-                "pnl_up=$%.2f pnl_dn=$%.2f | pending=%s trades=%d",
+                "pnl_up=$%.2f pnl_dn=$%.2f | pending=%s trades=%d | "
+                "api_rec=%d api_flat=%d",
                 slug,
                 elapsed,
                 secs_left,
@@ -398,6 +597,8 @@ class PaladinV7LiveEngine:
                 snap["pnl_if_down_usdc"],
                 pend_s,
                 len(runner.st.trades),
+                self._v7_window_reconcile_applies,
+                self._v7_window_flatten_fills,
             )
 
         def try_buy_fn(

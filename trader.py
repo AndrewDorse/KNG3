@@ -138,6 +138,20 @@ class PolymarketTrader:
         except Exception:
             return 0.0
 
+    def token_balance_allowance_refreshed(self, token_id: str) -> float:
+        """Sync conditional allowance with CLOB then read balance (API can lag; use for reconciliation)."""
+        try:
+            self.client.update_balance_allowance(
+                BalanceAllowanceParams(
+                    asset_type=AssetType.CONDITIONAL,
+                    token_id=token_id,
+                    signature_type=self.config.signature_type,
+                )
+            )
+        except Exception as exc:
+            LOGGER.debug("update_balance_allowance conditional %s: %s", token_id[:16], exc)
+        return self.token_balance(token_id)
+
     def has_sufficient_balance(self, required_usdc: float) -> bool:
         """Check if wallet has enough USDC for planned orders.
         Returns True if balance >= required, else logs warning and returns False."""

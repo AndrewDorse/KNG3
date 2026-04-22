@@ -225,6 +225,14 @@ class BotConfig:
     paladin_v7_max_orders: int = 4
     paladin_v7_min_notional: float = 1.0
     paladin_v7_min_shares: float = 5.0
+    # Live: poll CLOB conditional balances vs SimState; debounce to tolerate API delay.
+    paladin_v7_reconcile_enabled: bool = True
+    paladin_v7_reconcile_interval_seconds: float = 5.0
+    paladin_v7_reconcile_share_tolerance: float = 0.35
+    paladin_v7_reconcile_confirm_reads: int = 2
+    paladin_v7_reconcile_flatten: bool = True
+    paladin_v7_reconcile_flatten_min_imbalance: float = 0.25
+    paladin_v7_reconcile_flatten_cooldown_seconds: float = 10.0
 
     @property
     def window_size_seconds(self) -> int:
@@ -443,6 +451,21 @@ class BotConfig:
             paladin_v7_max_orders=max(0, _env_int("BOT_PALADIN_V7_MAX_ORDERS", 4)),
             paladin_v7_min_notional=max(0.01, _env_float("BOT_PALADIN_V7_MIN_NOTIONAL", 1.0)),
             paladin_v7_min_shares=max(1.0, _env_float("BOT_PALADIN_V7_MIN_SHARES", 5.0)),
+            paladin_v7_reconcile_enabled=_env_bool("BOT_PALADIN_V7_RECONCILE_ENABLED", True),
+            paladin_v7_reconcile_interval_seconds=max(
+                2.0, _env_float("BOT_PALADIN_V7_RECONCILE_INTERVAL_SEC", 5.0)
+            ),
+            paladin_v7_reconcile_share_tolerance=max(
+                0.05, _env_float("BOT_PALADIN_V7_RECONCILE_SHARE_TOL", 0.35)
+            ),
+            paladin_v7_reconcile_confirm_reads=max(1, _env_int("BOT_PALADIN_V7_RECONCILE_CONFIRM_READS", 2)),
+            paladin_v7_reconcile_flatten=_env_bool("BOT_PALADIN_V7_RECONCILE_FLATTEN", True),
+            paladin_v7_reconcile_flatten_min_imbalance=max(
+                0.05, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_MIN_IMB", 0.25)
+            ),
+            paladin_v7_reconcile_flatten_cooldown_seconds=max(
+                2.0, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_COOLDOWN_SEC", 10.0)
+            ),
         )
 
 

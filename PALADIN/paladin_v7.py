@@ -304,22 +304,22 @@ def paladin_v7_step(
     if sh1 < min_sh - 1e-9:
         return
 
-    if (
-        buy(
-            st,
-            t=t,
-            side=mom,
-            shares=sh1,
-            px=px_1,
-            reason="v7_first_binance_spike",
-            budget=p.budget_usdc,
-            min_notional=p.min_notional,
-            min_shares=min_sh,
-        )
-        > 0
-    ):
+    matched = buy(
+        st,
+        t=t,
+        side=mom,
+        shares=sh1,
+        px=px_1,
+        reason="v7_first_binance_spike",
+        budget=p.budget_usdc,
+        min_notional=p.min_notional,
+        min_shares=min_sh,
+    )
+    # Live FAK can partially fill; hedge must target actual shares and leg VWAP (not requested clip / signal px).
+    if matched > 1e-9:
         other: Side = "down" if mom == "up" else "up"
-        runner.pending_second = (other, sh1, px_1, int(t))
+        leg_avg = float(st.avg_up) if mom == "up" else float(st.avg_down)
+        runner.pending_second = (other, float(matched), leg_avg, int(t))
 
 
 # Tight sim: $10 budget, 10 shares/side cap, 5-share clips, at most 4 fills (two spike pairs or one pair+refill).
@@ -330,7 +330,7 @@ V7_SMALL_BUDGET_4ORDERS = PaladinV7Params(
     max_orders=4,
     min_notional=1.0,
     min_shares=5.0,
-    forced_hedge_max_book_sum=1.04,
+    forced_hedge_max_book_sum=1.5,
     cheap_pair_sum_max=0.995,
 )
 
