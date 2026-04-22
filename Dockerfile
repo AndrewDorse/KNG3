@@ -24,6 +24,7 @@ COPY btc_price_feed.py /app/btc_price_feed.py
 COPY polymarket_ws.py /app/polymarket_ws.py
 COPY clob_fak.py /app/clob_fak.py
 COPY paladin_live_engine.py /app/paladin_live_engine.py
+COPY paladin_v7_live_engine.py /app/paladin_v7_live_engine.py
 COPY PALADIN /app/PALADIN
 COPY strategy_params /app/strategy_params
 

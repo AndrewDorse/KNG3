@@ -354,6 +354,7 @@ class PaladinLiveEngine:
             )
 
         pair_max = float(self.config.paladin_pair_sum_max)
+        pair_on_force = self.config.paladin_pair_sum_max_on_forced_hedge
         roi_tgt = float(self.config.paladin_target_min_roi)
         hb_sec = float(self.config.paladin_heartbeat_seconds)
         s = float(pm_u) + float(pm_d)
@@ -365,7 +366,8 @@ class PaladinLiveEngine:
             snap = runner.st.snapshot_metrics()
             LOGGER.info(
                 "PALADIN heartbeat | %s | elapsed=%ds left=%.0fs | mid_up=%.4f mid_dn=%.4f sum=%.4f "
-                "| stagger=%s 1st_leg_mid<=%.3f pending=%s | 2nd_leg: sum<=%.3f roi>=%.3f (~sum<=%.3f) "
+                "| stagger=%s 1st_leg_mid<=%.3f pending=%s | 2nd_leg: sum<=%.3f "
+                "hedge_timer_sum<=%s roi>=%.3f (~sum<=%.3f) "
                 "| spent=$%.2f | U=%.2f@%.3f D=%.2f@%.3f | pnl_if_up=$%.2f pnl_if_dn=$%.2f roi_u=%.4f roi_d=%.4f",
                 slug,
                 elapsed,
@@ -377,6 +379,7 @@ class PaladinLiveEngine:
                 float(self.config.paladin_first_leg_max_px),
                 pend_s,
                 pair_max,
+                f"{pair_on_force:.3f}" if pair_on_force is not None else "strict",
                 roi_tgt,
                 implied_second_leg_cap,
                 runner.st.spent_usdc,
@@ -398,7 +401,6 @@ class PaladinLiveEngine:
             budget_usdc=float(self.config.strategy_budget_cap_usdc),
             params=self._params,
             pair_sum_max=pair_max,
-            pair_sum_max_on_forced_hedge=self.config.paladin_pair_sum_max_on_forced_hedge,
             single_leg_max_px=float(self.config.paladin_first_leg_max_px),
             pair_only=True,
             stagger_pair_entry=bool(self.config.paladin_stagger_pair),
@@ -412,6 +414,7 @@ class PaladinLiveEngine:
             try_buy_fn=try_buy_fn,
             pair_sum_tighten_per_fill=float(self.config.paladin_pair_sum_tighten_per_fill),
             pair_sum_min_floor=float(self.config.paladin_pair_sum_min_floor),
+            pair_sum_max_on_forced_hedge=self.config.paladin_pair_sum_max_on_forced_hedge,
             pending_hedge_bypass_imbalance_shares=self.config.paladin_pending_hedge_bypass_imbalance_shares,
             discipline_relax_after_forced_sec=self.config.paladin_discipline_relax_after_forced_sec,
             second_leg_book_improve_eps=float(self.config.paladin_second_leg_book_improve_eps),
