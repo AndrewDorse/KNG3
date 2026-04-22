@@ -76,14 +76,14 @@ Recommended:
 ## Go live checklist
 
 1. Set secrets only in Hostinger env (never in Git).
-2. First deploy with `POLY_DRY_RUN=true`; confirm logs show `PALADIN_pair_live_v3`, `paladin_ladder=`, heartbeat lines, and WS status (or REST fallback).
+2. First deploy with `POLY_DRY_RUN=true`; confirm logs show `PALADIN_pair_live_v4`, `paladin_v4`, `paladin_ladder=`, heartbeat lines, and WS status (or REST fallback).
 3. Set `POLY_DRY_RUN=false` to trade for real.
 
 ## Strategy note (default: `paladin`)
 
 This repo is the **KNG3 deploy mirror** of development tree `kng_bot3`. Sync PALADIN sources from there before production bumps.
 
-The deployment defaults to **`BOT_STRATEGY_MODE=paladin`** (**PALADIN v3**: **10 shares/side**, **100s** between pair starts, **no trailing** unless you set `BOT_PALADIN_ENTRY_TRAILING_MIN_LOW_SEC` ≥ 0). Behavior:
+The deployment defaults to **`BOT_STRATEGY_MODE=paladin`** (**PALADIN v4**: **10 shares/side**, **90s** hedge-force timer, **0.97** max blended pair avg, **100s** between pair starts, **no trailing** unless you set `BOT_PALADIN_ENTRY_TRAILING_MIN_LOW_SEC` ≥ 0). Behavior:
 
 - Pair-only FAK buys on BTC 15m up/down; optional CLOB market WebSocket for mids (`BOT_POLY_WS_*`)
 - Gates: pair sum cap, marginal ROI on the second leg, staggered first leg, optional hedge-force timer, per-side share cap

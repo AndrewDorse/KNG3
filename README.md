@@ -1,3 +1,9 @@
+# KNG3 (deploy mirror)
+
+**Docker / Hostinger:** use folder **`hostinger-docker/`** — Dockerfile path `hostinger-docker/Dockerfile`, build context = **repo root**. See `hostinger-docker/README.md` for PALADIN **v4** env defaults.
+
+---
+
 # Hostinger VPS Docker Setup
 
 This folder is isolated from the current project runtime. It adds only the files needed to deploy the live bot through Hostinger Docker Manager from a GitHub URL.
