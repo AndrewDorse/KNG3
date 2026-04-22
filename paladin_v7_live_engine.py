@@ -2,9 +2,11 @@
 """
 Live PALADIN v7: Binance agg-trade volume + spot move (via RealtimeBtcPriceFeed) + Polymarket mids.
 
-Each poll builds a 900s causal tick vector (per-second PM + accumulated Binance volume in that second),
-then runs one ``paladin_v7_step`` at the current window ``elapsed`` with FAK execution wired like
-``paladin_live_engine.PaladinLiveEngine``.
+Each poll updates the per-second PM/BTC arrays. ``paladin_v7_step`` is designed for replay: **one call
+per integer market second** ``elapsed``. When ``poll_interval_seconds`` is below 1, many polls can share the
+same ``elapsed``; we therefore run ``paladin_v7_step`` at most once per ``(slug, elapsed)`` so signals
+are not fired twice in the same second (duplicate FAKs). FAK POST+confirm stays serialized in
+``PolymarketTrader`` via a lock.
 """
 
 from __future__ import annotations
@@ -114,6 +116,9 @@ class PaladinV7LiveEngine:
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
         self._new_cutoff_warned_slug: str | None = None
+        # Run paladin_v7_step at most once per integer market second (elapsed). Multiple polls can
+        # fall in the same second when poll_interval < 1s; re-running the same t replays signals → double FAKs.
+        self._last_v7_step_at_elapsed: int = -1
         self._v7_params = _v7_params_from_config(config)
         if config.polymarket_ws_enabled:
             try:
@@ -274,6 +279,7 @@ class PaladinV7LiveEngine:
             reason,
             (res.order_id[:24] + "…") if res.order_id else "?",
         )
+        self._align_leg_to_api_after_fak(contract, st, t=t, side=side, px_hint=avg_px)
         return filled
 
     @staticmethod
@@ -289,6 +295,71 @@ class PaladinV7LiveEngine:
             st.size_down = max(0.0, float(st.size_down) - remove)
             if st.size_down < 1e-9:
                 st.size_down, st.avg_down = 0.0, 0.0
+
+    def _align_leg_to_api_after_fak(
+        self,
+        contract: ActiveContract,
+        st: SimState,
+        *,
+        t: int,
+        side: str,
+        px_hint: float,
+    ) -> None:
+        """One refresh vs CLOB balance for the bought token; trim or add model shares if drift exceeds tolerance."""
+        tok = contract.up if side == "up" else contract.down
+        try:
+            api = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
+        except Exception as exc:
+            LOGGER.debug("post-FAK balance read skipped: %s", exc)
+            return
+        tol = float(self.config.paladin_v7_reconcile_share_tolerance)
+        cur = float(st.size_up) if side == "up" else float(st.size_down)
+        delta = api - cur
+        if abs(delta) <= tol:
+            return
+        if delta < -tol:
+            remove = -delta
+            prev_avg = float(st.avg_up) if side == "up" else float(st.avg_down)
+            self._shrink_leg(st, side, remove)
+            st.spent_usdc = max(0.0, float(st.spent_usdc) - remove * prev_avg)
+            LOGGER.warning(
+                "PALADIN v7 post-FAK API trim %s by %.4f sh (API %.4f vs model %.4f)",
+                side.upper(),
+                remove,
+                api,
+                cur,
+            )
+            return
+        su, au, sd, ad = apply_buy_fill(
+            st.size_up,
+            st.avg_up,
+            st.size_down,
+            st.avg_down,
+            side=side,  # type: ignore[arg-type]
+            add_shares=delta,
+            fill_price=float(px_hint),
+        )
+        st.size_up, st.avg_up, st.size_down, st.avg_down = su, au, sd, ad
+        notion = float(delta) * float(px_hint)
+        st.spent_usdc += notion
+        st.trades.append(
+            Trade(
+                t,
+                side,  # type: ignore[arg-type]
+                float(delta),
+                float(px_hint),
+                notion,
+                "v7_post_fak_api_sync|live",
+            )
+        )
+        LOGGER.warning(
+            "PALADIN v7 post-FAK API add %s +%.4f sh @ %.4f (API %.4f vs model %.4f)",
+            side.upper(),
+            delta,
+            float(px_hint),
+            api,
+            cur,
+        )
 
     def _sync_state_to_api_balances(
         self,
@@ -481,6 +552,7 @@ class PaladinV7LiveEngine:
             self._last_flatten_ts = 0.0
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
+            self._last_v7_step_at_elapsed = -1
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
                 self._ws.set_assets([contract.up.token_id, contract.down.token_id])
@@ -569,8 +641,6 @@ class PaladinV7LiveEngine:
                 )
             return
 
-        ticks = _build_ticks(self._sec_pm_u, self._sec_pm_d, self._sec_btc_px, self._sec_btc_vol, elapsed, wsec)
-
         hb_sec = float(self.config.paladin_heartbeat_seconds)
         if now - self._last_hb_ts >= hb_sec:
             self._last_hb_ts = now
@@ -626,4 +696,9 @@ class PaladinV7LiveEngine:
                 min_shares=min_shares,
             )
 
+        # Exactly one strategy step per market second (see module docstring).
+        if self._last_v7_step_at_elapsed == elapsed:
+            return
+        self._last_v7_step_at_elapsed = elapsed
+        ticks = _build_ticks(self._sec_pm_u, self._sec_pm_d, self._sec_btc_px, self._sec_btc_vol, elapsed, wsec)
         paladin_v7_step(runner, elapsed, ticks, params=self._v7_params, try_buy_fn=try_buy_fn)
