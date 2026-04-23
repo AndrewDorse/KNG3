@@ -45,6 +45,21 @@ def _decode_fixed_size(raw: Any) -> float:
     return v / 1_000_000.0
 
 
+def _open_order_buy_economics(od: dict) -> tuple[float, float] | None:
+    """
+    BUY fill economics from an OpenOrder-shaped dict when present.
+
+    Polymarket documents ``OpenOrder.price`` as the **limit** price, not execution VWAP.
+    Prefer ``takingAmount`` / ``makingAmount`` (outcome shares received / USDC spent) when
+    the API includes them on GET /order so we do not treat the limit as the fill average.
+    """
+    taking = _f(od.get("takingAmount")) or _f(od.get("taking_amount"))
+    making = _f(od.get("makingAmount")) or _f(od.get("making_amount"))
+    if taking > 1e-12 and making >= 0:
+        return taking, making
+    return None
+
+
 def parse_fak_buy_post_response(
     resp: Any,
     *,
@@ -143,17 +158,31 @@ def refine_fak_buy_with_get_order(
             time.sleep(delay_sec)
             continue
         matched = _decode_fixed_size(od.get("size_matched"))
-        px = _f(od.get("price")) or float(limit_price)
-        last_px = px
+        px_lim = _f(od.get("price")) or float(limit_price)
+        last_px = px_lim
         if matched > 1e-9:
-            usdc = matched * px
-            LOGGER.info(
-                "FAK confirm GET /order: matched=%.4f sh @ %.4f (~$%.2f)",
+            econ = _open_order_buy_economics(od)
+            if econ is not None:
+                sh, usdc = econ
+                apx = usdc / sh if sh > 1e-12 else float(limit_price)
+                LOGGER.info(
+                    "FAK confirm GET /order: matched=%.4f sh vwap=%.4f (~$%.2f) [taking/making]",
+                    sh,
+                    apx,
+                    usdc,
+                )
+                return sh, usdc, apx
+            usdc = matched * px_lim
+            LOGGER.warning(
+                "FAK confirm GET /order: OpenOrder has no taking/making; using size_matched * "
+                "OpenOrder.price — **price is LIMIT (FAK cap), not execution VWAP** "
+                "(see Polymarket OpenOrder docs). matched=%.4f limit_px=%.4f (~$%.2f). "
+                "Heartbeats / PnL use this as avg until economics appear.",
                 matched,
-                px,
+                px_lim,
                 usdc,
             )
-            return matched, usdc, px
+            return matched, usdc, px_lim
         last_sh = matched
         time.sleep(delay_sec)
     if last_sh > 1e-9:

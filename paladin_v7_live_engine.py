@@ -5,7 +5,10 @@ Live PALADIN v7: Binance agg-trade volume + spot move (via RealtimeBtcPriceFeed)
 Each poll updates the per-second PM/BTC arrays. ``paladin_v7_step`` is designed for replay: **one call
 per integer market second** ``elapsed``. When ``poll_interval_seconds`` is below 1, many polls can share the
 same ``elapsed``; we therefore run ``paladin_v7_step`` at most once per ``(slug, elapsed)`` so signals
-are not fired twice in the same second (duplicate FAKs). FAK POST+confirm stays serialized in
+are not fired twice in the same second (duplicate FAKs). A **set** of fired ``elapsed`` values (not only
+``last == elapsed``) avoids re-running an older second if ``elapsed`` ever moves backward (clock skew).
+``pending_second`` is re-read **after** reconcile so cutoff/entry-delay gates match post-sync state.
+FAK POST+confirm stays serialized in
 ``PolymarketTrader`` via a lock.
 """
 
@@ -116,9 +119,10 @@ class PaladinV7LiveEngine:
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
         self._new_cutoff_warned_slug: str | None = None
-        # Run paladin_v7_step at most once per integer market second (elapsed). Multiple polls can
-        # fall in the same second when poll_interval < 1s; re-running the same t replays signals → double FAKs.
-        self._last_v7_step_at_elapsed: int = -1
+        # Run paladin_v7_step at most once per integer market second (elapsed) per window. Multiple polls
+        # can share the same elapsed when poll_interval < 1s. Track every fired elapsed so a backward
+        # jump in int(now - start_ts) cannot replay an already-evaluated second (double FAKs).
+        self._v7_steps_fired: set[int] = set()
         self._v7_params = _v7_params_from_config(config)
         if config.polymarket_ws_enabled:
             try:
@@ -552,7 +556,7 @@ class PaladinV7LiveEngine:
             self._last_flatten_ts = 0.0
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
-            self._last_v7_step_at_elapsed = -1
+            self._v7_steps_fired = set()
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
                 self._ws.set_assets([contract.up.token_id, contract.down.token_id])
@@ -574,9 +578,9 @@ class PaladinV7LiveEngine:
         elapsed = max(0, min(elapsed, wsec - 1))
 
         secs_left = end_ts - now
-        pend = runner.pending_second
+        pend_for_force = runner.pending_second
         if secs_left <= float(self.config.force_exit_before_end_seconds):
-            if pend is None:
+            if pend_for_force is None:
                 if self._force_exit_warned_slug != slug:
                     self._force_exit_warned_slug = slug
                     LOGGER.info(
@@ -617,6 +621,7 @@ class PaladinV7LiveEngine:
         self._sec_btc_vol[elapsed] += bv
 
         self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
+        pend = runner.pending_second
 
         entry_delay = int(self.config.strategy_entry_delay_seconds)
         if elapsed < entry_delay and pend is None:
@@ -647,8 +652,8 @@ class PaladinV7LiveEngine:
             snap = runner.st.snapshot_metrics()
             pend_s = f"{pend[0]}×{pend[1]:.0f}" if pend is not None else "—"
             LOGGER.info(
-                "PALADIN v7 hb | %s | el=%ds left=%.0fs | mid_up=%.4f mid_dn=%.4f | "
-                "btc=%.2f vol+%.4f/sum_el | spent=$%.2f | U=%.2f@%.3f D=%.2f@%.3f | "
+                "PALADIN v7 hb | %s | el=%ds left=%.0fs | mkt_mid up=%.4f dn=%.4f | "
+                "btc=%.2f vol+%.4f/sum_el | spent=$%.2f | inv UP=%.2fsh vwap=%.3f | inv DN=%.2fsh vwap=%.3f | "
                 "pnl_up=$%.2f pnl_dn=$%.2f | pending=%s trades=%d | "
                 "api_rec=%d api_flat=%d",
                 slug,
@@ -697,8 +702,8 @@ class PaladinV7LiveEngine:
             )
 
         # Exactly one strategy step per market second (see module docstring).
-        if self._last_v7_step_at_elapsed == elapsed:
+        if elapsed in self._v7_steps_fired:
             return
-        self._last_v7_step_at_elapsed = elapsed
+        self._v7_steps_fired.add(elapsed)
         ticks = _build_ticks(self._sec_pm_u, self._sec_pm_d, self._sec_btc_px, self._sec_btc_vol, elapsed, wsec)
         paladin_v7_step(runner, elapsed, ticks, params=self._v7_params, try_buy_fn=try_buy_fn)
