@@ -46,7 +46,7 @@ def main() -> int:
     )
     LOGGER.info("forced_hedge = pm_up+pm_dn <= %.3f after hedge timeout", config.paladin_v7_forced_hedge_max_book_sum)
     LOGGER.info(
-        "cheap_hedge  = nonforced_pair_cap<=%.4f | min_delay=%.1fs slip=%.4f | hedge_timeout=%.1fs (forced only after)",
+        "cheap_hedge  = hedge/refill cap<=%.4f (not first leg) | min_delay=%.1fs slip=%.4f | hedge_timeout=%.1fs",
         float(config.paladin_v7_cheap_pair_avg_sum_nonforced_max),
         float(config.paladin_v7_cheap_hedge_min_delay_sec),
         float(config.paladin_v7_cheap_hedge_slip_buffer),
