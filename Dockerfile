@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: remove stale /price fallback and size low-priced entries to min_notional when possible.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-live-price-min-notional-fixes
+# Sync from kng_bot3: start each window with the higher PM side immediately; no start delay.
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-flat-start-lead
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

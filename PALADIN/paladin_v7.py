@@ -351,6 +351,37 @@ def paladin_v7_step(
     flat = su <= 1e-9 and sd <= 1e-9
     both = min(su, sd) + 1e-9 >= min_sz_gate
 
+    # --- Start-of-window first leg: when flat, buy the higher PM side immediately ---
+    if flat:
+        lead = _lead_side(pm_u, pm_d)
+        px_0 = pm_u if lead == "up" else pm_d
+        sh0 = _entry_shares(
+            st,
+            lead,
+            base_sz,
+            px=px_0,
+            cap=p.max_shares_per_side,
+            min_sh=min_sh,
+            min_notional=p.min_notional,
+        )
+        if sh0 >= min_sh - 1e-9:
+            matched0 = buy(
+                st,
+                t=t,
+                side=lead,
+                shares=sh0,
+                px=px_0,
+                reason="v7_first_window_lead",
+                budget=p.budget_usdc,
+                min_notional=p.min_notional,
+                min_shares=min_sh,
+            )
+            if matched0 > 1e-9:
+                other0: Side = "down" if lead == "up" else "up"
+                leg_avg0 = float(st.avg_up) if lead == "up" else float(st.avg_down)
+                runner.pending_second = (other0, float(matched0), leg_avg0, int(t))
+        return
+
     # --- Imbalance repair: top up lighter side when pm_light + avg(heavy) < cap ---
     if not balanced and not flat:
         su, sd = float(st.size_up), float(st.size_down)

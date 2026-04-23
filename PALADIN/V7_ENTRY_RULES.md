@@ -1,6 +1,6 @@
 # Paladin v7 — when we buy (first legs & layers)
 
-Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pair is open → **(1) imbalance repair** → **(2) layer dips** → **(3) Binance spike first leg**. At most one “new risk” path that sets `pending_second` runs per second (hedge can fill partially across seconds).
+Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pair is open → **(1) first-window lead if flat** → **(2) imbalance repair** → **(3) layer dips** → **(4) Binance spike first leg**. At most one “new risk” path that sets `pending_second` runs per second (hedge can fill partially across seconds).
 
 ---
 
@@ -33,7 +33,19 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 
 ---
 
-## 1) Imbalance repair (not a paired first leg)
+## 1) First-window lead (`v7_first_window_lead`)
+
+**When:** Flat inventory.
+
+**Buy:** The side with the **higher Polymarket mid** right now (`_lead_side`).
+
+**Size:** `base_order_shares`, upsized only if needed to satisfy `min_notional` and room allows.
+
+**After fill:** Set `pending_second` for the opposite hedge. No BTC spike is required.
+
+---
+
+## 2) Imbalance repair (not a paired first leg)
 
 **When:** Not flat, not balanced (`|Δ| > tolerance`), and no `pending_second` block ran this second.
 
@@ -43,7 +55,7 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 
 ---
 
-## 2) Extra layers (only if balanced + both-sided + cooldown)
+## 3) Extra layers (only if balanced + both-sided + cooldown)
 
 **When:** Balanced, both-sided enough, and `elapsed − last_completed_pair_elapsed ≥ layer2_cooldown_sec` (min 1s).
 
@@ -59,14 +71,14 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
    - **Condition:** that side’s mid **<** its own VWAP − `layer2_low_vwap_dip_below_avg` (default 0.20).  
    - Same clip / pending pattern as (1).
 
-3. *(Not a “dip”; next block)* Binance spike first leg when still allowed (see §3).
+3. *(Not a “dip”; next block)* Binance spike first leg when still allowed (see §4).
 
 ---
 
-## 3) Binance spike first leg (`v7_first_binance_spike`)
+## 4) Binance spike first leg (`v7_first_binance_spike`)
 
-**When:** `can_open` = flat **or** (balanced **and** both-sided enough).  
-**Cooldown:** Unless flat, require `elapsed − last_completed_pair_elapsed ≥ pair_cooldown_sec` (min 1s).
+**When:** `can_open` = balanced **and** both-sided enough.  
+**Cooldown:** Require `elapsed − last_completed_pair_elapsed ≥ pair_cooldown_sec` (min 1s).
 
 **Market gates (same second):**
 

@@ -746,18 +746,6 @@ class PaladinV7LiveEngine:
         self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
         pend = runner.pending_second
 
-        entry_delay = int(self.config.strategy_entry_delay_seconds)
-        if elapsed < entry_delay and pend is None:
-            if self._entry_delay_warned_slug != slug:
-                self._entry_delay_warned_slug = slug
-                LOGGER.info(
-                    "PALADIN v7 live: entry delay (%ds) for %s; elapsed=%ds",
-                    entry_delay,
-                    slug,
-                    elapsed,
-                )
-            return
-
         cutoff = float(self.config.strategy_new_order_cutoff_seconds)
         if secs_left <= cutoff and pend is None:
             if self._new_cutoff_warned_slug != slug:
@@ -818,6 +806,12 @@ class PaladinV7LiveEngine:
             if reason == "v7_hedge_cheap" and runner.pending_second is not None:
                 avg_first = float(runner.pending_second[2])
                 px_eff = min(px_eff, max(0.01, mh - avg_first - slip - 1e-4))
+            elif reason == "v7_first_window_lead":
+                tok = contract.up if side == "up" else contract.down
+                ask = self._best_ask_price(tok)
+                if ask is not None:
+                    # First-window lead should actually open the book, not rest near the midpoint.
+                    px_eff = max(px_eff, ask)
             elif reason == "v7_hedge_forced":
                 tok = contract.up if side == "up" else contract.down
                 ask = self._best_ask_price(tok)
