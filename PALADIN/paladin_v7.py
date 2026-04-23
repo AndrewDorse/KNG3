@@ -12,7 +12,9 @@ PALADIN v7 (sim): Binance per-second volume spike + BTC price impulse → Polyma
    opened). When **that** side's mid is **strictly below** its own VWAP minus ``layer2_dip_below_avg`` (default
    0.05), buy ``base_order_shares`` there, then hedge the opposite with the same cheap/forced rules as (2). If
    VWAPs tie, fall back to higher PM mid. E.g. ``avg_up=0.55`` vs ``avg_down=0.42`` → only UP is watched;
-   ``pm_u < 0.50`` triggers the add — current ``pm_d`` does not pick the side.
+   ``pm_u < 0.50`` triggers the add — current ``pm_d`` does not pick the side. After any **completed** pair,
+   the next layer‑2 add waits ``max(1, layer2_cooldown_sec)`` replay seconds (default **1s** between layers).
+   New Binance spike first legs still use ``pair_cooldown_sec`` (default 20s) when balanced.
 4) **Imbalance repair** when share counts differ but neither side is flat: buy the **lighter** side (up to the
    gap) when ``pm_light + avg_heavy < imbalance_repair_max_pair_sum`` (default 0.97), e.g. 10 UP @ 0.525 avg and
    5 DOWN → buy DOWN when ``pm_d + 0.525 < 0.97``. No ``pending_second``; this only catches up inventory.
@@ -49,7 +51,7 @@ class PaladinV7Params:
     budget_usdc: float = 400.0
     # First leg, layer-2 dip add, and hedge clip size (see BOT_PALADIN_V7_BASE_ORDER_SHARES).
     base_order_shares: float = 5.0
-    max_shares_per_side: float = 10.0
+    max_shares_per_side: float = 16.0
     min_notional: float = 1.0
     min_shares: float = 5.0
 
@@ -77,6 +79,9 @@ class PaladinV7Params:
     # Imbalance: buy lighter side when pm_light + VWAP(heavy) < this (0.97 = 97¢ pair proxy vs heavy leg).
     imbalance_repair_max_pair_sum: float = 0.97
 
+    # Seconds after a completed pair before the next layer‑2 *add* may fire (default 1; min 1 replay second).
+    layer2_cooldown_sec: float = 1.0
+    # Seconds after a completed pair before a new Binance spike first leg (balanced book; default 20).
     pair_cooldown_sec: float = 20.0
 
 
@@ -321,7 +326,8 @@ def paladin_v7_step(
                     return
 
     # --- Layer 2: higher-VWAP side mid < its own avg − dip; add base_sz; hedge opposite ---
-    if balanced and both and (float(t) - float(runner.last_completed_pair_elapsed)) >= 1.0:
+    l2_cd = max(1.0, float(p.layer2_cooldown_sec))
+    if balanced and both and (float(t) - float(runner.last_completed_pair_elapsed)) >= l2_cd:
         dip_side = _higher_vwap_side(st, pm_u, pm_d)
         sz_l = st.size_up if dip_side == "up" else st.size_down
         avg_l = st.avg_up if dip_side == "up" else st.avg_down
@@ -394,7 +400,7 @@ def paladin_v7_step(
 V7_SMALL_BUDGET_4ORDERS = PaladinV7Params(
     budget_usdc=10.0,
     base_order_shares=5.0,
-    max_shares_per_side=10.0,
+    max_shares_per_side=16.0,
     min_notional=1.0,
     min_shares=5.0,
     forced_hedge_max_book_sum=1.5,
