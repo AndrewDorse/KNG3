@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# This tag: v7 layer-2 dip on lead side, base_order_shares, monolithic main deps optional COPY.
-ARG KNG3_IMAGE_TAG=2026-04-23-kng3-main-no-btc15-import
+# This tag: layer-2 dip on higher-VWAP leg, imbalance repair pm_light+avg_heavy<cap, no room_o gate.
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-layer2-hivwap-imbrepair
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

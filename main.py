@@ -36,11 +36,13 @@ def main() -> int:
     LOGGER.info("strategy_id  = %s", "PALADIN_v7_binance_spike_live")
     LOGGER.info("poly_ws      = %s (%s)", config.polymarket_ws_enabled, config.polymarket_ws_url)
     LOGGER.info(
-        "paladin_v7   = budget=$%.2f base_order=%.1f max/side=%.0f layer2_dip=%.3f vol_ratio=%.2f lookback=%ds btc_move>=%.2f",
+        "paladin_v7   = budget=$%.2f base_order=%.1f max/side=%.0f layer2_dip=%.3f imb_repair<%.3f "
+        "vol_ratio=%.2f lookback=%ds btc_move>=%.2f",
         float(config.strategy_budget_cap_usdc),
         float(config.paladin_v7_base_order_shares),
         float(config.paladin_v7_max_shares_per_side),
         float(config.paladin_v7_layer2_dip_below_avg),
+        float(config.paladin_v7_imbalance_repair_max_pair_sum),
         float(config.paladin_v7_volume_spike_ratio),
         int(config.paladin_v7_volume_lookback_sec),
         float(config.paladin_v7_btc_abs_move_min_usd),
