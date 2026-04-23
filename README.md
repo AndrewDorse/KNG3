@@ -11,6 +11,8 @@ The image also copies **`btc15_redeem_engine.py`**, **`paladin_live_engine.py`**
 
 **Build from this repo** (root `Dockerfile`). If an old image still errors on a missing module, rebuild with `docker compose build --no-cache`.
 
+If logs show **`ModuleNotFoundError: btc15_redeem_engine`** while using **`BOT_STRATEGY_MODE=paladin_v7`**, the container is running an **old** `main.py` that imports that module at startup. Fix: **pull latest `kng_bot3` `main.py`** (lazy imports for v7) **or** use this repo’s slim `main.py` **or** ensure the image includes `btc15_redeem_engine.py` (this repo’s `Dockerfile` already `COPY`s it).
+
 Full strategy development stays in **kng_bot3**; this repo only ships what the `Dockerfile` copies.
 
 **Sync:** from `kng_bot3` run `powershell -File deploy\sync_kng3_mirror.ps1` (see `kng_bot3/deploy/KNG3_MIRROR.txt`). Last checked parity with **`kng_bot3` @ `8229e6e`** for every path in the `Dockerfile` `COPY` list.

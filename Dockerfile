@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
 # This tag: v7 layer-2 dip on lead side, base_order_shares, monolithic main deps optional COPY.
-ARG KNG3_IMAGE_TAG=2026-04-21-v7-layer2-budget-cli
+ARG KNG3_IMAGE_TAG=2026-04-23-main-lazy-v7-imports
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
