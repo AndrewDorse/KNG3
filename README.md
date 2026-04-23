@@ -7,6 +7,8 @@ Minimal mirror to run **PALADIN v7** live on Polymarket BTC 15m markets.
 
 `BOT_STRATEGY_MODE` must be `paladin_v7` (the entrypoint rejects other modes).
 
+**Build from this repo only** (root `Dockerfile`). If logs show `ModuleNotFoundError: btc15_redeem_engine`, the image used **monolithic `kng_bot3/main.py`** — wrong build context or stale cache. Rebuild with `--no-cache` from **KNG3**, not from `kng_bot3`.
+
 Full strategy development stays in **kng_bot3**; this repo only ships what the `Dockerfile` copies.
 
 **Sync:** from `kng_bot3` run `powershell -File deploy\sync_kng3_mirror.ps1` (see `kng_bot3/deploy/KNG3_MIRROR.txt`). Last checked parity with **`kng_bot3` @ `8229e6e`** for every path in the `Dockerfile` `COPY` list.
