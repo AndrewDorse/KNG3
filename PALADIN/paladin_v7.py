@@ -262,6 +262,13 @@ def paladin_v7_step(
     # Same cheap / forced logic for hedges after *any* first leg (spike, -5c layer, -20c layer).
     if runner.pending_second is not None:
         side_o, sh_need, avg_first, t0 = runner.pending_second
+        # Live FAKs can leave sub-clip residue (e.g. 5.16 requested, 5.00 hedged, 0.16 left).
+        # That remainder is economically "done enough" once it is inside the balance tolerance;
+        # otherwise it would block all future layers forever because the pending path returns early.
+        if float(sh_need) <= max(1e-6, float(p.balance_share_tolerance)):
+            runner.pending_second = None
+            runner.last_completed_pair_elapsed = int(t)
+            return
         px_o = pm_u if side_o == "up" else pm_d
         age = float(t) - float(t0)
         forced = age + 1e-9 >= float(p.hedge_timeout_seconds)
@@ -279,8 +286,11 @@ def paladin_v7_step(
         ok_forced = forced
 
         if ok_cheap or ok_forced:
-            sh_exec = _clamp_shares(st, side_o, sh_need, p.max_shares_per_side, min_sh)
-            if sh_exec >= min_sh - 1e-9:
+            # Cleanup hedges are allowed below the normal clip minimum; otherwise a 1-4 share
+            # remainder can never be worked down in live trading.
+            hedge_min_sh = 1.0 if float(sh_need) < min_sh - 1e-9 else min_sh
+            sh_exec = _clamp_shares(st, side_o, sh_need, p.max_shares_per_side, hedge_min_sh)
+            if sh_exec >= hedge_min_sh - 1e-9:
                 # If mid*shares < CLOB min notional (e.g. $1), still complete the hedge in sim.
                 hedge_mn = float(p.min_notional)
                 if sh_exec * px_o + 1e-9 < hedge_mn:
@@ -295,7 +305,7 @@ def paladin_v7_step(
                     reason=reason,
                     budget=p.budget_usdc,
                     min_notional=hedge_mn,
-                    min_shares=min_sh,
+                    min_shares=hedge_min_sh,
                 )
                 if filled > 1e-9:
                     # Live FAK can partially fill; do not clear pending until hedge need is exhausted

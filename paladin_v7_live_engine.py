@@ -192,6 +192,16 @@ class PaladinV7LiveEngine:
         mid = self.trader.get_midpoint(tm.token_id)
         return float(mid) if mid is not None and mid > 0 else None
 
+    def _best_ask_price(self, tm: TokenMarket) -> float | None:
+        if self._ws is not None:
+            ba = self._ws.best_bid_ask_for(tm.token_id, max_age_sec=5.0)
+            if ba is not None:
+                _bid, ask = ba
+                if ask > 0:
+                    return float(ask)
+        ask = self.trader.get_best_ask(tm.token_id)
+        return float(ask) if ask is not None and ask > 0 else None
+
     def _live_buy(
         self,
         contract: ActiveContract,
@@ -798,6 +808,13 @@ class PaladinV7LiveEngine:
             if reason == "v7_hedge_cheap" and runner.pending_second is not None:
                 avg_first = float(runner.pending_second[2])
                 px_eff = min(px_eff, max(0.01, mh - avg_first - slip - 1e-4))
+            elif reason == "v7_hedge_forced":
+                tok = contract.up if side == "up" else contract.down
+                ask = self._best_ask_price(tok)
+                if ask is not None:
+                    # Forced hedge should be willing to pay the current ask; otherwise "forced"
+                    # can keep posting near the mid and miss indefinitely.
+                    px_eff = max(px_eff, ask)
             return self._live_buy(
                 contract,
                 st,
