@@ -59,6 +59,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         first_leg_max_pm=float(cfg.paladin_v7_first_leg_max_pm),
         cheap_other_margin=float(cfg.paladin_v7_cheap_other_margin),
         cheap_pair_sum_max=float(cfg.paladin_v7_cheap_pair_sum_max),
+        cheap_hedge_slip_buffer=float(cfg.paladin_v7_cheap_hedge_slip_buffer),
         hedge_timeout_seconds=float(cfg.paladin_v7_hedge_timeout_seconds),
         forced_hedge_max_book_sum=float(cfg.paladin_v7_forced_hedge_max_book_sum),
         refill_clip_fraction=float(cfg.paladin_v7_refill_clip_fraction),
@@ -193,6 +194,10 @@ class PaladinV7LiveEngine:
         min_notional: float,
         min_shares: float,
     ) -> float:
+        px = float(px)
+        # Raise FAK cap vs signal mid so CLOB can match (cheap gate uses the same buffer in pair_held_quote_sum).
+        if str(reason).startswith("v7_"):
+            px = min(0.99, px + float(self.config.paladin_v7_cheap_hedge_slip_buffer))
         px = round(px, 4)
         notion = shares * px
         if shares < min_shares - 1e-9 or notion < min_notional - 1e-9:
@@ -300,6 +305,19 @@ class PaladinV7LiveEngine:
             if st.size_down < 1e-9:
                 st.size_down, st.avg_down = 0.0, 0.0
 
+    @staticmethod
+    def _latest_exec_fill_price(st: SimState, side: str) -> float | None:
+        """Last non-reconcile trade price for ``side`` (actual FAK VWAP), for reconcile economics."""
+        for tr in reversed(st.trades):
+            if str(tr.side) != side:
+                continue
+            r = str(tr.reason)
+            if "v7_api_reconcile_sync" in r or "v7_post_fak_api_sync" in r:
+                continue
+            if float(tr.price) > 1e-9:
+                return float(tr.price)
+        return None
+
     def _align_leg_to_api_after_fak(
         self,
         contract: ActiveContract,
@@ -311,17 +329,48 @@ class PaladinV7LiveEngine:
     ) -> None:
         """One refresh vs CLOB balance for the bought token; trim or add model shares if drift exceeds tolerance."""
         tok = contract.up if side == "up" else contract.down
-        try:
-            api = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
-        except Exception as exc:
-            LOGGER.debug("post-FAK balance read skipped: %s", exc)
-            return
         tol = float(self.config.paladin_v7_reconcile_share_tolerance)
         cur = float(st.size_up) if side == "up" else float(st.size_down)
+        if cur < 1e-6:
+            return
+
+        api = 0.0
+        for attempt, delay in enumerate((0.0, 0.1, 0.22, 0.38)):
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                api = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
+            except Exception as exc:
+                LOGGER.debug("post-FAK balance read skipped: %s", exc)
+                return
+            if api > 0.25 or abs(api - cur) <= tol:
+                break
+            if attempt == 3:
+                break
+
+        ms = float(self.config.paladin_v7_min_shares)
+        # CLOB balances often lag right after a FAK; API=0 with model>0 would incorrectly zero the leg.
+        if cur + 1e-9 >= ms and api < 0.25:
+            LOGGER.warning(
+                "PALADIN v7 post-FAK: skip API align %s (API=%.4f vs model=%.4f; likely stale balance read)",
+                side.upper(),
+                api,
+                cur,
+            )
+            return
+
         delta = api - cur
         if abs(delta) <= tol:
             return
         if delta < -tol:
+            if cur + 1e-9 >= ms and api < 1.0:
+                LOGGER.warning(
+                    "PALADIN v7 post-FAK: refuse trim %s (API=%.4f vs model=%.4f; likely stale)",
+                    side.upper(),
+                    api,
+                    cur,
+                )
+                return
             remove = -delta
             prev_avg = float(st.avg_up) if side == "up" else float(st.avg_down)
             self._shrink_leg(st, side, remove)
@@ -382,6 +431,7 @@ class PaladinV7LiveEngine:
             if abs(delta) <= 1e-9:
                 continue
             if delta > 0:
+                fill_px = float(self._latest_exec_fill_price(st, side) or pm)
                 su, au, sd, ad = apply_buy_fill(
                     st.size_up,
                     st.avg_up,
@@ -389,27 +439,28 @@ class PaladinV7LiveEngine:
                     st.avg_down,
                     side=side,  # type: ignore[arg-type]
                     add_shares=delta,
-                    fill_price=float(pm),
+                    fill_price=fill_px,
                 )
                 st.size_up, st.avg_up, st.size_down, st.avg_down = su, au, sd, ad
-                notion = float(delta) * float(pm)
+                notion = float(delta) * float(fill_px)
                 st.spent_usdc += notion
                 st.trades.append(
                     Trade(
                         elapsed,
                         side,  # type: ignore[arg-type]
                         float(delta),
-                        float(pm),
+                        float(fill_px),
                         notion,
                         "v7_api_reconcile_sync",
                     )
                 )
                 LOGGER.warning(
-                    "PALADIN v7 reconcile SYNC +%.4f %s sh @ %.4f (~$%.2f) to match API",
+                    "PALADIN v7 reconcile SYNC +%.4f %s sh @ %.4f (~$%.2f) to match API (mid=%.4f if no exec ref)",
                     delta,
                     side,
-                    float(pm),
+                    float(fill_px),
                     notion,
+                    float(pm),
                 )
             else:
                 self._shrink_leg(st, side, -delta)
@@ -418,6 +469,29 @@ class PaladinV7LiveEngine:
                     -delta,
                     side,
                 )
+
+    def _resync_pending_second_after_reconcile(self, runner: PaladinV7Runner, elapsed: int) -> None:
+        """Rebuild open-hedge intent from inventory after API sync (do not drop pending on stale reads)."""
+        st = runner.st
+        du = float(st.size_up) - float(st.size_down)
+        ms = float(self.config.paladin_v7_min_shares)
+        eps = max(0.06, ms * 0.51)
+        if abs(du) <= eps:
+            runner.pending_second = None
+            return
+        if float(st.size_up) < 1e-9 and float(st.size_down) < 1e-9:
+            runner.pending_second = None
+            return
+        if du > eps:
+            if float(st.avg_up) <= 1e-9:
+                runner.pending_second = None
+                return
+            runner.pending_second = ("down", float(du), float(st.avg_up), int(elapsed))
+        elif du < -eps:
+            if float(st.avg_down) <= 1e-9:
+                runner.pending_second = None
+                return
+            runner.pending_second = ("up", float(-du), float(st.avg_down), int(elapsed))
 
     def _maybe_flatten_inventory(
         self,
@@ -526,8 +600,10 @@ class PaladinV7LiveEngine:
         )
         self._v7_window_reconcile_applies += 1
         self._sync_state_to_api_balances(runner, api_u, api_d, pm_u, pm_d, elapsed)
-        runner.pending_second = None
-        self._maybe_flatten_inventory(contract, runner, pm_u, pm_d, now, elapsed)
+        self._resync_pending_second_after_reconcile(runner, elapsed)
+        # Avoid flatten FAK competing with the same-cycle v7 hedge when pending was rebuilt from API skew.
+        if runner.pending_second is None:
+            self._maybe_flatten_inventory(contract, runner, pm_u, pm_d, now, elapsed)
 
     def _loop_once(self) -> None:
         contract = self.locator.get_active_contract()

@@ -54,6 +54,9 @@ class PaladinV7Params:
     first_leg_max_pm: float = 0.62
     cheap_other_margin: float = 0.04
     cheap_pair_sum_max: float = 0.99
+    # Live FAK often walks the book above the WS mid used for gating; require headroom so
+    # avg_first + (mid_opposite + buffer) <= cheap cap (avoids approving hedges that fill >1 pair avg).
+    cheap_hedge_slip_buffer: float = 0.012
     hedge_timeout_seconds: float = 90.0
     forced_hedge_max_book_sum: float = 1.30
 
@@ -203,9 +206,10 @@ def paladin_v7_step(
         age = float(t) - float(t0)
         forced = age + 1e-9 >= float(p.hedge_timeout_seconds)
 
-        # Non-forced: held first-leg VWAP + this tick's opposite mid (same anchor as FAK px).
-        # Tightest of book cap and (1 - margin) keeps sub-$1 pair discipline without gating on pm_u+pm_d.
-        pair_held_quote_sum = float(avg_first) + float(px_o)
+        # Non-forced: held first-leg VWAP + conservative opposite quote (mid + slip buffer).
+        # FAK fills can print above the mid used as the limit anchor; buffer aligns gate with live VWAP.
+        slip = max(0.0, float(p.cheap_hedge_slip_buffer))
+        pair_held_quote_sum = float(avg_first) + float(px_o) + slip
         cap = min(float(p.cheap_pair_sum_max), 1.0 - float(p.cheap_other_margin))
         ok_cheap = pair_held_quote_sum + 1e-9 <= cap
 

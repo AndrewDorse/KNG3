@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+# Bump when syncing Paladin v7 sources from kng_bot3 (image identity / support).
+ARG KNG3_IMAGE_TAG=2026-04-21-paladin-v7-sync
+LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
+      org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1

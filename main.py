@@ -45,6 +45,10 @@ def main() -> int:
         float(config.paladin_v7_btc_abs_move_min_usd),
     )
     LOGGER.info("forced_hedge = pm_up+pm_dn <= %.3f after hedge timeout", config.paladin_v7_forced_hedge_max_book_sum)
+    LOGGER.info(
+        "cheap_hedge  = slip_buffer=%.4f (gate + FAK cushion vs mid)",
+        float(config.paladin_v7_cheap_hedge_slip_buffer),
+    )
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("=" * 60)
 
