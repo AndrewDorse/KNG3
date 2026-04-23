@@ -11,7 +11,7 @@ The image also copies **`btc15_redeem_engine.py`**, **`paladin_live_engine.py`**
 
 **Build from this repo** (root `Dockerfile`). If an old image still errors on a missing module, rebuild with `docker compose build --no-cache`.
 
-If logs show **`ModuleNotFoundError: btc15_redeem_engine`** while using **`BOT_STRATEGY_MODE=paladin_v7`**, the container is running an **old** `main.py` that imports that module at startup. Fix: **pull latest `kng_bot3` `main.py`** (lazy imports for v7) **or** use this repo’s slim `main.py` **or** ensure the image includes `btc15_redeem_engine.py` (this repo’s `Dockerfile` already `COPY`s it).
+If logs show **`ModuleNotFoundError: btc15_redeem_engine`** at **`main.py` line 8**, the container is **not** running this repo’s **`main.py`** (line 8 here is `from config`). You are on a **stale image** or a **volume/bind mount** is replacing `/app/main.py` with **`kng_bot3` monolithic `main.py`**. Fix: **`docker compose build --no-cache`**, remove any mount over `/app` or `main.py`, redeploy, and **`git pull`** this repo so the build uses the current **`Dockerfile`** (includes a build-time check that `main.py` does not mention `btc15_redeem_engine`).
 
 Full strategy development stays in **kng_bot3**; this repo only ships what the `Dockerfile` copies.
 

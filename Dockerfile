@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
 # This tag: v7 layer-2 dip on lead side, base_order_shares, monolithic main deps optional COPY.
-ARG KNG3_IMAGE_TAG=2026-04-23-main-lazy-v7-imports
+ARG KNG3_IMAGE_TAG=2026-04-23-kng3-main-no-btc15-import
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
@@ -20,6 +20,8 @@ RUN pip install --upgrade pip && \
     pip install -r /app/requirements.txt
 
 COPY main.py /app/main.py
+# Guard: baked main must be KNG3 v7-only entry (no top-level btc15 import).
+RUN python -c "s=open('/app/main.py',encoding='utf-8').read(); assert 'btc15_redeem_engine' not in s, 'main.py must not name btc15_redeem_engine'"
 COPY config.py /app/config.py
 COPY trader.py /app/trader.py
 COPY market_locator.py /app/market_locator.py
