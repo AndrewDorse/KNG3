@@ -229,8 +229,10 @@ class BotConfig:
     paladin_v7_hedge_timeout_seconds: float = 90.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
     paladin_v7_pair_cooldown_sec: float = 20.0
+    # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
     paladin_v7_max_shares_per_side: float = 10.0
+    # Layer 2: lead-side mid must be <= that leg's avg minus this (e.g. 0.05 = 5c dip).
     paladin_v7_layer2_dip_below_avg: float = 0.05
     paladin_v7_min_notional: float = 1.0
     paladin_v7_min_shares: float = 5.0
