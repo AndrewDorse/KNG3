@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
 # This tag: forced hedge not gated on pm_u+pm_d; reconcile eps no longer clears ~2.5sh pending.
-ARG KNG3_IMAGE_TAG=2026-04-21-kng3-v7-hedge-force-reconcile-eps
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-preserve-hedge-t0-on-reconcile
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
