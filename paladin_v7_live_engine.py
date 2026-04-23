@@ -186,9 +186,8 @@ class PaladinV7LiveEngine:
             mid = self._ws.mid_for(tm.token_id, max_age_sec=5.0)
             if mid is not None and mid > 0:
                 return float(mid)
-        p = self.trader.get_market_price(tm.token_id)
-        if p is not None and p > 0:
-            return float(p)
+        # Do not use /price as a signal fallback: it is last-trade-ish and can be badly stale
+        # versus the live order book, which caused repeated FAKs far from the actual ask.
         mid = self.trader.get_midpoint(tm.token_id)
         return float(mid) if mid is not None and mid > 0 else None
 
@@ -223,6 +222,17 @@ class PaladinV7LiveEngine:
         px = round(px, 4)
         notion = shares * px
         if shares < min_shares - 1e-9 or notion < min_notional - 1e-9:
+            LOGGER.info(
+                "PALADIN v7 skip BUY %s shares=%.4f px=%.4f notion=$%.2f reason=%s "
+                "(min_shares=%.4f min_notional=%.2f)",
+                side.upper(),
+                shares,
+                px,
+                notion,
+                reason,
+                min_shares,
+                min_notional,
+            )
             return 0.0
         size = int(round(shares))
         if size < int(math.ceil(min_shares)):

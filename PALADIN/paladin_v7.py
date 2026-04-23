@@ -27,9 +27,10 @@ Uses ``SimState`` / ``try_buy`` from the PALADIN window harness.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path
 import csv
+from dataclasses import dataclass, field
+import math
+from pathlib import Path
 from typing import Any, Callable, Literal
 
 from simulate_paladin_window import SimState, try_buy
@@ -242,6 +243,31 @@ def _clamp_shares(st: SimState, side: Side, sh: float, cap: float, min_sh: float
     return min(float(sh), room)
 
 
+def _entry_shares(
+    st: SimState,
+    side: Side,
+    desired_shares: float,
+    *,
+    px: float,
+    cap: float,
+    min_sh: float,
+    min_notional: float,
+) -> float:
+    """Clip for new-risk buys; upsizes only when needed to satisfy the exchange min notional."""
+    cur = float(st.size_up) if side == "up" else float(st.size_down)
+    room = float(cap) - cur
+    if room < min_sh - 1e-9:
+        return 0.0
+    need = max(float(desired_shares), float(min_sh))
+    if px > 1e-9 and min_notional > 1e-9:
+        # Live FAK rounds to integer shares, so ceil here keeps sim/live intent aligned.
+        need = max(need, float(math.ceil(float(min_notional) / float(px) - 1e-9)))
+    sh = min(need, room)
+    if sh < min_sh - 1e-9:
+        return 0.0
+    return sh
+
+
 def paladin_v7_step(
     runner: PaladinV7Runner,
     t: int,
@@ -344,7 +370,15 @@ def paladin_v7_step(
             pm_l = float(pm_u)
             gap = sd - su
         if light is not None and gap > bal_tol + 1e-9:
-            sh_rep = _clamp_shares(st, light, gap, p.max_shares_per_side, min_sh)
+            sh_rep = _entry_shares(
+                st,
+                light,
+                gap,
+                px=pm_l,
+                cap=p.max_shares_per_side,
+                min_sh=min_sh,
+                min_notional=p.min_notional,
+            )
             if sh_rep >= min_sh - 1e-9 and pm_l + avg_h + 1e-9 < cap_rep:
                 filled_ir = buy(
                     st,
@@ -369,7 +403,15 @@ def paladin_v7_step(
         sz_s = float(st.size_up) if side == "up" else float(st.size_down)
         dip_m = max(0.0, float(dip_below_avg))
         other_s: Side = "down" if side == "up" else "up"
-        sh_add = _clamp_shares(st, side, base_sz, p.max_shares_per_side, min_sh)
+        sh_add = _entry_shares(
+            st,
+            side,
+            base_sz,
+            px=px_s,
+            cap=p.max_shares_per_side,
+            min_sh=min_sh,
+            min_notional=p.min_notional,
+        )
         if (
             sz_s + 1e-9 < min_sz_gate
             or not (px_s + 1e-9 < avg_s - dip_m)
@@ -421,7 +463,15 @@ def paladin_v7_step(
     if px_1 + 1e-9 > float(p.first_leg_max_pm):
         return
 
-    sh1 = _clamp_shares(st, mom, base_sz, p.max_shares_per_side, min_sh)
+    sh1 = _entry_shares(
+        st,
+        mom,
+        base_sz,
+        px=px_1,
+        cap=p.max_shares_per_side,
+        min_sh=min_sh,
+        min_notional=p.min_notional,
+    )
     if sh1 < min_sh - 1e-9:
         return
 
