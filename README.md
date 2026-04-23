@@ -5,6 +5,8 @@ Minimal mirror to run **PALADIN v7** live on Polymarket BTC 15m markets.
 - Copy `.env.example` to `.env` and set keys / `POLY_DRY_RUN` (e.g. **`BOT_STRATEGY_BUDGET_CAP_USDC=80`** to match common live sizing).
 - `docker compose build --no-cache` then `docker compose up -d` after each pull (see **`Dockerfile`** `KNG3_IMAGE_TAG` bump).
 
+**Entry logic (first legs & layers):** see **`PALADIN/V7_ENTRY_RULES.md`** in this repo (also copied into the image at `/app/PALADIN/V7_ENTRY_RULES.md`).
+
 `BOT_STRATEGY_MODE` must be `paladin_v7` for the bundled **KNG3 `main.py`** (it rejects other modes).
 
 The image also copies **`btc15_redeem_engine.py`**, **`paladin_live_engine.py`**, and **`signal_analyzer.py`** so a **monolithic `kng_bot3/main.py`** (same imports as upstream) can start without `ModuleNotFoundError` after rebuild.
