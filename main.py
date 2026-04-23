@@ -46,8 +46,10 @@ def main() -> int:
     )
     LOGGER.info("forced_hedge = pm_up+pm_dn <= %.3f after hedge timeout", config.paladin_v7_forced_hedge_max_book_sum)
     LOGGER.info(
-        "cheap_hedge  = slip_buffer=%.4f (gate + FAK cushion vs mid)",
+        "cheap_hedge  = min_delay=%.1fs slip_buffer=%.4f | hedge_timeout=%.1fs (max age → forced; not min gap)",
+        float(config.paladin_v7_cheap_hedge_min_delay_sec),
         float(config.paladin_v7_cheap_hedge_slip_buffer),
+        float(config.paladin_v7_hedge_timeout_seconds),
     )
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("=" * 60)

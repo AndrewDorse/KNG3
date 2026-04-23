@@ -60,6 +60,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         cheap_other_margin=float(cfg.paladin_v7_cheap_other_margin),
         cheap_pair_sum_max=float(cfg.paladin_v7_cheap_pair_sum_max),
         cheap_hedge_slip_buffer=float(cfg.paladin_v7_cheap_hedge_slip_buffer),
+        cheap_hedge_min_delay_sec=float(cfg.paladin_v7_cheap_hedge_min_delay_sec),
         hedge_timeout_seconds=float(cfg.paladin_v7_hedge_timeout_seconds),
         forced_hedge_max_book_sum=float(cfg.paladin_v7_forced_hedge_max_book_sum),
         refill_clip_fraction=float(cfg.paladin_v7_refill_clip_fraction),
