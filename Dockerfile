@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
 # Sync from kng_bot3: entry rules doc + v7/live_engine/config parity.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-entry-rules-doc-sync
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-entry-rules-clarify-forced
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
