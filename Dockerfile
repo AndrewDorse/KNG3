@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# This tag: max 16/side, layer2_cd=1s, pair_cd=20s spike, higher-VWAP layer2, imbalance repair.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-max16-l2cd1s
+# This tag: balance_share_tolerance + lower-VWAP layer dip + sync from kng_bot3.
+ARG KNG3_IMAGE_TAG=2026-04-21-kng3-v7-balance-tol-lowvwap-dip
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

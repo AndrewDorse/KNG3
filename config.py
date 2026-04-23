@@ -230,13 +230,17 @@ class BotConfig:
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
     # After each completed pair: min wait before next layer‑2 add (replay seconds; min 1 in strategy).
     paladin_v7_layer2_cooldown_sec: float = 1.0
-    # After each completed pair: min wait before next Binance spike first leg when balanced.
-    paladin_v7_pair_cooldown_sec: float = 20.0
+    # After each completed pair: min wait before next Binance spike first leg when balanced (min 1s in from_env).
+    paladin_v7_pair_cooldown_sec: float = 1.0
     # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
     paladin_v7_max_shares_per_side: float = 16.0
     # Layer 2: higher-VWAP leg's mid must be < that leg's avg minus this (tie: higher PM mid picks leg).
     paladin_v7_layer2_dip_below_avg: float = 0.05
+    # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
+    paladin_v7_layer2_low_vwap_dip_below_avg: float = 0.20
+    # |up−down| <= this (shares) counts as balanced for extra layers + spike-from-balanced (default 1.0).
+    paladin_v7_balance_share_tolerance: float = 1.0
     # Imbalance repair: buy lighter side when pm_light + VWAP(heavy) < this (default 0.97).
     paladin_v7_imbalance_repair_max_pair_sum: float = 0.97
     paladin_v7_min_notional: float = 1.0
@@ -307,7 +311,7 @@ class BotConfig:
         return cls(
             private_key=private_key.strip(),
             funder=funder,
-            bot_version=os.getenv("BOT_VERSION", "paladin-v7-max16-l2cd1s-2026-04-24").strip(),
+            bot_version=os.getenv("BOT_VERSION", "paladin-v7-binance-spike-2026-04-21").strip(),
             signature_type=_env_int("POLY_SIGNATURE_TYPE", 1),
             relayer_api_key=os.getenv("RELAYER_API_KEY", ""),
             relayer_secret=os.getenv("RELAYER_SECRET", ""),
@@ -475,7 +479,9 @@ class BotConfig:
             paladin_v7_layer2_cooldown_sec=max(
                 0.0, min(300.0, _env_float("BOT_PALADIN_V7_LAYER2_COOLDOWN_SEC", 1.0))
             ),
-            paladin_v7_pair_cooldown_sec=max(0.0, _env_float("BOT_PALADIN_V7_PAIR_COOLDOWN_SEC", 20.0)),
+            paladin_v7_pair_cooldown_sec=max(
+                1.0, min(300.0, _env_float("BOT_PALADIN_V7_PAIR_COOLDOWN_SEC", 1.0))
+            ),
             paladin_v7_base_order_shares=(
                 max(1.0, _env_float("BOT_PALADIN_V7_BASE_ORDER_SHARES", 5.0))
                 if (os.getenv("BOT_PALADIN_V7_BASE_ORDER_SHARES") or "").strip()
@@ -484,6 +490,12 @@ class BotConfig:
             paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 16.0)),
             paladin_v7_layer2_dip_below_avg=max(
                 0.0, min(0.5, _env_float("BOT_PALADIN_V7_LAYER2_DIP_BELOW_AVG", 0.05))
+            ),
+            paladin_v7_layer2_low_vwap_dip_below_avg=max(
+                0.0, min(0.95, _env_float("BOT_PALADIN_V7_LAYER2_LOW_VWAP_DIP_BELOW_AVG", 0.20))
+            ),
+            paladin_v7_balance_share_tolerance=max(
+                0.0, min(50.0, _env_float("BOT_PALADIN_V7_BALANCE_SHARE_TOLERANCE", 1.0))
             ),
             paladin_v7_imbalance_repair_max_pair_sum=max(
                 0.5, min(1.0, _env_float("BOT_PALADIN_V7_IMBALANCE_REPAIR_MAX_PAIR_SUM", 0.97))

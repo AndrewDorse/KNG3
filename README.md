@@ -15,7 +15,7 @@ If logs show **`ModuleNotFoundError: btc15_redeem_engine`** at **`main.py` line 
 
 Full strategy development stays in **kng_bot3**; this repo only ships what the `Dockerfile` copies.
 
-**Sync:** from `kng_bot3` run `powershell -File deploy\sync_kng3_mirror.ps1` (see `kng_bot3/deploy/KNG3_MIRROR.txt`). Last checked parity with **`kng_bot3` @ `8229e6e`** for every path in the `Dockerfile` `COPY` list.
+**Sync:** from `kng_bot3` run `powershell -File deploy\sync_kng3_mirror.ps1` (see `kng_bot3/deploy/KNG3_MIRROR.txt`). Sync copies everything in the `Dockerfile` `COPY` list **except** `main.py` — keep **this repo’s** v7-only `main.py` in git. Image label: see **`Dockerfile`** `KNG3_IMAGE_TAG`.
 
 ## Verify before deploy (local)
 
