@@ -484,8 +484,9 @@ class PaladinV7LiveEngine:
         """Rebuild open-hedge intent from inventory after API sync (do not drop pending on stale reads)."""
         st = runner.st
         du = float(st.size_up) - float(st.size_down)
-        ms = float(self.config.paladin_v7_min_shares)
-        eps = max(0.06, ms * 0.51)
+        # Treat only small drift as "flat hedge need" — not min_shares*0.51 (~2.55 sh), which cleared
+        # pending while still multi-share imbalanced and blocked hedges after reconcile.
+        eps = max(0.05, float(self.config.paladin_v7_reconcile_share_tolerance))
         if abs(du) <= eps:
             runner.pending_second = None
             return

@@ -5,9 +5,12 @@ PALADIN v7 (sim): Binance per-second volume spike + BTC price impulse → Polyma
 1) **First leg** when (rolling Binance base-volume vs lookback mean) spikes *and* BTC price moves
    in the same second; side = momentum (price up → UP token, down → DOWN token). Gated by
    ``first_leg_max_pm`` only — **not** by ``_nonforced_pair_cap`` (that cap is for hedges / layer-2 hedge only).
-2) **Second leg** (hedge) on the opposite outcome: *cheap* when
-   **held VWAP on the opened side + opposite mid + slip** <= ``_nonforced_pair_cap``; *forced* when
-   age >= ``hedge_timeout_seconds`` and ``pm_u+pm_d <= forced_hedge_max_book_sum``.
+2) **Second leg** (hedge) on the opposite outcome — **one code path for every incomplete pair**, including after
+   an opening spike, a higher‑VWAP dip add, a lower‑VWAP dip add, or a balanced spike add (all set
+   ``pending_second`` the same way): *cheap* when **held VWAP on the opened side + opposite mid + slip** <=
+   ``_nonforced_pair_cap``; *forced* when age >= ``hedge_timeout_seconds`` (always tries — **not** gated on
+   ``pm_u+pm_d``; a book-sum gate would strand hedges when mids sum > ``forced_hedge_max_book_sum``).
+   ``forced_hedge_max_book_sum`` remains on ``PaladinV7Params`` for logging / future use.
 3) **Extra layers** when book is **balanced** (see ``balance_share_tolerance``): (a) **Higher‑VWAP** leg: mid
    **<** that leg's avg minus ``layer2_dip_below_avg`` (default 5¢); (b) **Lower‑VWAP** (“losing” avg) leg: mid
    **<** that leg's avg minus ``layer2_low_vwap_dip_below_avg`` (default 20¢); (c) **Binance spike** first leg
@@ -72,6 +75,7 @@ class PaladinV7Params:
     # as the cheap gate passes. Forced hedge at hedge_timeout_seconds is unaffected.
     cheap_hedge_min_delay_sec: float = 0.0
     hedge_timeout_seconds: float = 90.0
+    # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
     # Layer: higher-VWAP leg's mid must be < that leg's avg minus this (default 5¢).
@@ -255,6 +259,7 @@ def paladin_v7_step(
     base_sz = float(p.base_order_shares)
 
     # --- Pending hedge (second leg on *other* side) ---
+    # Same cheap / forced logic for hedges after *any* first leg (spike, -5c layer, -20c layer).
     if runner.pending_second is not None:
         side_o, sh_need, avg_first, t0 = runner.pending_second
         px_o = pm_u if side_o == "up" else pm_d
@@ -269,7 +274,9 @@ def paladin_v7_step(
         min_cheap_age = max(0.0, float(p.cheap_hedge_min_delay_sec))
         ok_cheap = (age + 1e-9 >= min_cheap_age) and (pair_held_quote_sum + 1e-9 <= cap)
 
-        ok_forced = forced and (pm_u + pm_d) + 1e-9 <= float(p.forced_hedge_max_book_sum)
+        # Forced must run on timeout even when pm_u+pm_d > forced_hedge_max_book_sum (wide/late-window mids);
+        # otherwise cheap can fail forever and inventory stays one-sided.
+        ok_forced = forced
 
         if ok_cheap or ok_forced:
             sh_exec = _clamp_shares(st, side_o, sh_need, p.max_shares_per_side, min_sh)
