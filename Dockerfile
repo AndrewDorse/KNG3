@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: universal balance engine, 60s force timeout, and hard one-order live gating.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-universal-balance-fix
+# Sync from kng_bot3: use a 5-cent smaller-side balance threshold (0.45 from 0.50 avg, not 0.495).
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-balance-5c-fix
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

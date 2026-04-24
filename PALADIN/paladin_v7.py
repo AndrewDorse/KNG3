@@ -315,13 +315,13 @@ def paladin_v7_step(
         # Universal cheap-price rule:
         # - first hedge from one-sided inventory: keep pair-cost cap logic (<0.96 held+opp+slip)
         # - re-balancing when both sides already exist: only buy the smaller side on a better price
-        #   than its own average by 0.5c
+        #   than its own average by 5c
         min_cheap_age = max(0.0, float(p.cheap_hedge_min_delay_sec))
         ok_cheap = False
         px_limit = float(px_o)
         if both_nonflat:
             avg_small = float(st.avg_up) if side_o == "up" else float(st.avg_down)
-            px_limit = max(0.01, avg_small - 0.005)
+            px_limit = max(0.01, avg_small - 0.05)
             ok_cheap = (age + 1e-9 >= min_cheap_age) and (px_o + 1e-9 <= px_limit)
         else:
             slip = max(0.0, float(p.cheap_hedge_slip_buffer))
