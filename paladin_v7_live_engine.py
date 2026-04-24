@@ -122,6 +122,8 @@ class PaladinV7LiveEngine:
         self._v7_window_reconcile_applies: int = 0
         self._v7_window_flatten_fills: int = 0
         self._live_order_serial: int = 0
+        self._limit_order_busy_until_ts: float = 0.0
+        self._limit_order_busy_reason: str = ""
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -373,6 +375,8 @@ class PaladinV7LiveEngine:
 
         cancel_after = float(self.config.paladin_v7_limit_order_cancel_seconds)
         deadline = time.time() + cancel_after
+        self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, deadline)
+        self._limit_order_busy_reason = str(reason)
         order_state: dict[str, Any] | None = None
         filled = 0.0
         spent = 0.0
@@ -424,6 +428,9 @@ class PaladinV7LiveEngine:
         if not _can_afford_live(st.spent_usdc, spent, budget):
             LOGGER.warning("PALADIN v7: fill would exceed budget; skipping state update (filled=%.4f)", filled)
             return 0.0
+        if filled + 1e-9 >= req_shares:
+            self._limit_order_busy_until_ts = 0.0
+            self._limit_order_busy_reason = ""
         if avg_px <= 1e-9:
             avg_px = px
         if spent <= 1e-9:
@@ -798,6 +805,8 @@ class PaladinV7LiveEngine:
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
             self._live_order_serial = 0
+            self._limit_order_busy_until_ts = 0.0
+            self._limit_order_busy_reason = ""
             self._v7_steps_fired = set()
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
@@ -861,6 +870,9 @@ class PaladinV7LiveEngine:
         self._sec_pm_d[elapsed] = float(pm_d)
         self._sec_btc_px[elapsed] = float(btc_point.price)
         self._sec_btc_vol[elapsed] += bv
+
+        if now < self._limit_order_busy_until_ts - 1e-9:
+            return
 
         order_serial_0 = self._live_order_serial
         self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
