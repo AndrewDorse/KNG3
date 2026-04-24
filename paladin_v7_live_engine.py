@@ -124,6 +124,11 @@ class PaladinV7LiveEngine:
         self._live_order_serial: int = 0
         self._limit_order_busy_until_ts: float = 0.0
         self._limit_order_busy_reason: str = ""
+        self._active_limit_order_id: str = ""
+        self._active_limit_order_side: str = ""
+        self._active_limit_order_reason: str = ""
+        self._active_limit_order_req_shares: float = 0.0
+        self._active_limit_order_last_check_ts: float = 0.0
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -248,6 +253,91 @@ class PaladinV7LiveEngine:
             px_lim = cls._num(order.get("price")) or float(limit_px)
             return matched, matched * px_lim, px_lim, status
         return 0.0, 0.0, 0.0, status
+
+    @staticmethod
+    def _order_status_is_open(status: str) -> bool:
+        return status.lower() in {
+            "open",
+            "live",
+            "active",
+            "pending",
+            "partially_filled",
+            "unmatched",
+            "delayed",
+        }
+
+    @staticmethod
+    def _order_status_is_closed(status: str) -> bool:
+        return status.lower() in {
+            "filled",
+            "matched",
+            "cancelled",
+            "canceled",
+            "expired",
+            "closed",
+        }
+
+    def _set_active_limit_order(self, order_id: str, side: str, reason: str, req_shares: float) -> None:
+        self._active_limit_order_id = str(order_id or "")
+        self._active_limit_order_side = str(side)
+        self._active_limit_order_reason = str(reason)
+        self._active_limit_order_req_shares = float(req_shares)
+        self._active_limit_order_last_check_ts = 0.0
+
+    def _clear_active_limit_order(self) -> None:
+        self._active_limit_order_id = ""
+        self._active_limit_order_side = ""
+        self._active_limit_order_reason = ""
+        self._active_limit_order_req_shares = 0.0
+        self._active_limit_order_last_check_ts = 0.0
+        self._limit_order_busy_until_ts = 0.0
+        self._limit_order_busy_reason = ""
+
+    def _has_unresolved_active_limit_order(self, now: float, limit_px: float | None = None) -> bool:
+        order_id = str(self._active_limit_order_id or "")
+        if not order_id:
+            return False
+        if now - self._active_limit_order_last_check_ts < 0.4:
+            return True
+        self._active_limit_order_last_check_ts = now
+        order_state: dict[str, Any] | None = None
+        try:
+            order_state = self.trader.get_order(order_id)
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 active get_order %s: %s", order_id[:18], exc)
+        status = ""
+        filled = 0.0
+        if order_state is not None:
+            px_hint = float(limit_px) if limit_px is not None else 0.5
+            filled, _spent, _avg_px, status = self._buy_fill_from_order(order_state, px_hint)
+            if filled + 1e-9 >= float(self._active_limit_order_req_shares):
+                self._clear_active_limit_order()
+                return False
+            if self._order_status_is_closed(status):
+                self._clear_active_limit_order()
+                return False
+            if self._order_status_is_open(status):
+                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                return True
+        try:
+            open_orders = self.trader.get_open_orders()
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 active get_open_orders %s: %s", order_id[:18], exc)
+            self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+            return True
+        for od in open_orders:
+            oid = str(od.get("id") or od.get("orderID") or od.get("order_id") or "")
+            if oid == order_id:
+                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                return True
+        if status and not self._order_status_is_closed(status):
+            LOGGER.warning(
+                "PALADIN v7 order %s unresolved after cancel check; holding new orders | %s",
+                order_id[:24] + "…",
+                self._active_limit_order_reason,
+            )
+        self._clear_active_limit_order()
+        return False
 
     def _apply_live_buy_fill(
         self,
@@ -384,6 +474,7 @@ class PaladinV7LiveEngine:
 
         cancel_after = float(self.config.paladin_v7_limit_order_cancel_seconds)
         deadline = time.time() + cancel_after
+        self._set_active_limit_order(order_id, side, reason, req_shares)
         self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, deadline)
         self._limit_order_busy_reason = str(reason)
         order_state: dict[str, Any] | None = None
@@ -415,7 +506,11 @@ class PaladinV7LiveEngine:
                 cancelled,
                 reason,
             )
-            time.sleep(0.25)
+            cancel_confirm_deadline = time.time() + max(2.0, cancel_after)
+            while time.time() < cancel_confirm_deadline:
+                if not self._has_unresolved_active_limit_order(time.time(), px):
+                    break
+                time.sleep(0.25)
         try:
             order_state = self.trader.get_order(order_id)
         except Exception as exc:
@@ -434,12 +529,11 @@ class PaladinV7LiveEngine:
                 spent = filled * avg_px
         if filled <= 1e-9:
             return 0.0
+        if filled + 1e-9 >= req_shares or self._order_status_is_closed(status):
+            self._clear_active_limit_order()
         if not _can_afford_live(st.spent_usdc, spent, budget):
             LOGGER.warning("PALADIN v7: fill would exceed budget; skipping state update (filled=%.4f)", filled)
             return 0.0
-        if filled + 1e-9 >= req_shares:
-            self._limit_order_busy_until_ts = 0.0
-            self._limit_order_busy_reason = ""
         if avg_px <= 1e-9:
             avg_px = px
         if spent <= 1e-9:
@@ -816,6 +910,7 @@ class PaladinV7LiveEngine:
             self._live_order_serial = 0
             self._limit_order_busy_until_ts = 0.0
             self._limit_order_busy_reason = ""
+            self._clear_active_limit_order()
             self._v7_steps_fired = set()
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
@@ -880,6 +975,8 @@ class PaladinV7LiveEngine:
         self._sec_btc_px[elapsed] = float(btc_point.price)
         self._sec_btc_vol[elapsed] += bv
 
+        if self._has_unresolved_active_limit_order(now):
+            return
         if now < self._limit_order_busy_until_ts - 1e-9:
             return
 
