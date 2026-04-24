@@ -54,7 +54,7 @@ class PaladinV7Params:
     budget_usdc: float = 400.0
     # First leg, layer-2 dip add, and hedge clip size (see BOT_PALADIN_V7_BASE_ORDER_SHARES).
     base_order_shares: float = 5.0
-    max_shares_per_side: float = 16.0
+    max_shares_per_side: float = 20.0
     min_notional: float = 1.0
     min_shares: float = 5.0
 
@@ -74,7 +74,7 @@ class PaladinV7Params:
     # Do not allow ok_cheap until first-leg age >= this (seconds since first leg). 0 = legacy: hedge as soon
     # as the cheap gate passes. Forced hedge at hedge_timeout_seconds is unaffected.
     cheap_hedge_min_delay_sec: float = 0.0
-    hedge_timeout_seconds: float = 90.0
+    hedge_timeout_seconds: float = 60.0
     # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
@@ -280,19 +280,31 @@ def paladin_v7_step(
     buy: Any = try_buy_fn if try_buy_fn is not None else try_buy
     min_sh = float(p.min_shares)
     base_sz = float(p.base_order_shares)
+    su, sd = float(st.size_up), float(st.size_down)
+    gap_now = abs(su - sd)
+    flat_now = su <= 1e-9 and sd <= 1e-9
+    # Universal balance engine: if the live book is materially imbalanced, the next action must be
+    # on the lighter side. Use one pending path for first hedge and later re-balancing.
+    if runner.pending_second is None and (not flat_now) and gap_now + 1e-9 >= min_sh:
+        if su > sd + 1e-9:
+            runner.pending_second = ("down", gap_now, float(st.avg_up), int(t))
+        elif sd > su + 1e-9:
+            runner.pending_second = ("up", gap_now, float(st.avg_down), int(t))
 
     # --- Pending hedge (second leg on *other* side) ---
     # Same cheap / forced logic for hedges after *any* first leg (spike, -5c layer, -20c layer).
     if runner.pending_second is not None:
         side_o, sh_need, avg_first, t0 = runner.pending_second
-        # v7 now uses fixed 5-share buys in live trading. Any hedge remainder below min_shares
-        # cannot be posted to the exchange, so treat it as "done enough" and unblock the book.
-        if float(sh_need) < min_sh - 1e-9:
+        su, sd = float(st.size_up), float(st.size_down)
+        cur_gap = abs(su - sd)
+        both_nonflat = su > 1e-9 and sd > 1e-9
+        # The universal balance engine only acts on real, exchange-eligible imbalances.
+        if cur_gap < min_sh - 1e-9:
             runner.pending_second = None
             runner.last_completed_pair_elapsed = int(t)
             return
         # Tiny residue inside the balance tolerance is also considered complete.
-        if float(sh_need) <= max(1e-6, float(p.balance_share_tolerance)):
+        if cur_gap <= max(1e-6, float(p.balance_share_tolerance)):
             runner.pending_second = None
             runner.last_completed_pair_elapsed = int(t)
             return
@@ -300,28 +312,37 @@ def paladin_v7_step(
         age = float(t) - float(t0)
         forced = age + 1e-9 >= float(p.hedge_timeout_seconds)
 
-        # Non-forced: held first-leg VWAP + conservative opposite quote (mid + slip buffer).
-        # FAK fills can print above the mid used as the limit anchor; buffer aligns gate with live VWAP.
-        slip = max(0.0, float(p.cheap_hedge_slip_buffer))
-        pair_held_quote_sum = float(avg_first) + float(px_o) + slip
-        cap = _nonforced_pair_cap(p)
+        # Universal cheap-price rule:
+        # - first hedge from one-sided inventory: keep pair-cost cap logic (<0.96 held+opp+slip)
+        # - re-balancing when both sides already exist: only buy the smaller side on a better price
+        #   than its own average by 0.5c
         min_cheap_age = max(0.0, float(p.cheap_hedge_min_delay_sec))
-        ok_cheap = (age + 1e-9 >= min_cheap_age) and (pair_held_quote_sum + 1e-9 <= cap)
+        ok_cheap = False
+        px_limit = float(px_o)
+        if both_nonflat:
+            avg_small = float(st.avg_up) if side_o == "up" else float(st.avg_down)
+            px_limit = max(0.01, avg_small - 0.005)
+            ok_cheap = (age + 1e-9 >= min_cheap_age) and (px_o + 1e-9 <= px_limit)
+        else:
+            slip = max(0.0, float(p.cheap_hedge_slip_buffer))
+            pair_held_quote_sum = float(avg_first) + float(px_o) + slip
+            cap = _nonforced_pair_cap(p)
+            ok_cheap = (age + 1e-9 >= min_cheap_age) and (pair_held_quote_sum + 1e-9 <= cap)
 
         # Forced must run on timeout even when pm_u+pm_d > forced_hedge_max_book_sum (wide/late-window mids);
         # otherwise cheap can fail forever and inventory stays one-sided.
         ok_forced = forced
 
         if ok_cheap or ok_forced:
-            # Hedge buys follow the same clip system as every other buy: cap each request at base_sz.
-            # Small cleanup residue may still use a smaller clip so a nearly-complete pair is not stranded forever.
-            hedge_target = min(float(base_sz), float(sh_need))
-            hedge_min_sh = 1.0 if hedge_target < min_sh - 1e-9 else min_sh
+            # Balance with one order at a time, but when the imbalance is >= 5 shares, target the full gap.
+            hedge_target = float(cur_gap)
+            hedge_min_sh = min_sh
             sh_exec = _clamp_shares(st, side_o, hedge_target, p.max_shares_per_side, hedge_min_sh)
             if sh_exec >= hedge_min_sh - 1e-9:
                 # If mid*shares < CLOB min notional (e.g. $1), still complete the hedge in sim.
                 hedge_mn = float(p.min_notional)
-                if sh_exec * px_o + 1e-9 < hedge_mn:
+                px_exec = px_o if ok_forced else px_limit
+                if sh_exec * px_exec + 1e-9 < hedge_mn:
                     hedge_mn = 0.0
                 reason = "v7_hedge_forced" if ok_forced and not ok_cheap else "v7_hedge_cheap"
                 filled = buy(
@@ -329,7 +350,7 @@ def paladin_v7_step(
                     t=t,
                     side=side_o,
                     shares=sh_exec,
-                    px=px_o,
+                    px=px_exec,
                     reason=reason,
                     budget=p.budget_usdc,
                     min_notional=hedge_mn,
@@ -383,49 +404,6 @@ def paladin_v7_step(
                 leg_avg0 = float(st.avg_up) if lead == "up" else float(st.avg_down)
                 runner.pending_second = (other0, float(matched0), leg_avg0, int(t))
         return
-
-    # --- Imbalance repair: top up lighter side when pm_light + avg(heavy) < cap ---
-    if not balanced and not flat:
-        su, sd = float(st.size_up), float(st.size_down)
-        cap_rep = max(0.5, min(1.0, float(p.imbalance_repair_max_pair_sum)))
-        light: Side | None = None
-        avg_h = 0.0
-        pm_l = 0.0
-        gap = 0.0
-        if su > sd + 1e-9 and su > 1e-9:
-            light = "down"
-            avg_h = float(st.avg_up)
-            pm_l = float(pm_d)
-            gap = su - sd
-        elif sd > su + 1e-9 and sd > 1e-9:
-            light = "up"
-            avg_h = float(st.avg_down)
-            pm_l = float(pm_u)
-            gap = sd - su
-        if light is not None and gap > bal_tol + 1e-9:
-            sh_rep = _entry_shares(
-                st,
-                light,
-                min(gap, base_sz),
-                px=pm_l,
-                cap=p.max_shares_per_side,
-                min_sh=min_sh,
-                min_notional=p.min_notional,
-            )
-            if sh_rep >= min_sh - 1e-9 and pm_l + avg_h + 1e-9 < cap_rep:
-                filled_ir = buy(
-                    st,
-                    t=t,
-                    side=light,
-                    shares=sh_rep,
-                    px=pm_l,
-                    reason="v7_imbalance_repair",
-                    budget=p.budget_usdc,
-                    min_notional=p.min_notional,
-                    min_shares=min_sh,
-                )
-                if filled_ir > 1e-9:
-                    return
 
     # --- Extra layers: higher-VWAP dip, then lower-VWAP deep dip, then Binance spike (one fill → return) ---
     l2_cd = max(5.0, float(p.layer2_cooldown_sec))

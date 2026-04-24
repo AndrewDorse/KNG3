@@ -309,7 +309,16 @@ class PaladinV7LiveEngine:
         px = float(px)
         px = round(px, 4)
         exchange_min_shares = int(math.ceil(float(self.config.paladin_v7_min_shares)))
-        size = min(int(round(float(shares))), int(round(float(self.config.paladin_v7_base_order_shares))))
+        raw_size = int(round(float(shares)))
+        capped_reasons = {
+            "v7_first_window_lead",
+            "v7_first_binance_spike",
+            "v7_layer2_dip_lead",
+            "v7_layer2_lowvwap_dip",
+        }
+        if str(reason) in capped_reasons:
+            raw_size = min(raw_size, int(round(float(self.config.paladin_v7_base_order_shares))))
+        size = raw_size
         if size <= 0 or size < max(exchange_min_shares, int(math.ceil(min_shares))):
             return 0.0
         req_shares = float(size)
@@ -936,10 +945,12 @@ class PaladinV7LiveEngine:
             px_eff = float(px)
             mh = float(self.config.paladin_v7_cheap_pair_avg_sum_nonforced_max)
             slip = float(self.config.paladin_v7_cheap_hedge_slip_buffer)
-            # Non-forced cap on *our* hedge: clamp FAK vs held first-leg VWAP (same economics as sim).
+            # First hedges from a one-sided book still use the held+opp pair-cost cap.
+            # Once both sides exist, the strategy itself already gated on a better smaller-side price.
             if reason == "v7_hedge_cheap" and runner.pending_second is not None:
-                avg_first = float(runner.pending_second[2])
-                px_eff = min(px_eff, max(0.01, mh - avg_first - slip - 1e-4))
+                if min(float(st.size_up), float(st.size_down)) < float(self.config.paladin_v7_min_shares) - 1e-9:
+                    avg_first = float(runner.pending_second[2])
+                    px_eff = min(px_eff, max(0.01, mh - avg_first - slip - 1e-4))
             elif reason == "v7_first_window_lead":
                 tok = contract.up if side == "up" else contract.down
                 ask = self._best_ask_price(tok)

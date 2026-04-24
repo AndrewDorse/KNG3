@@ -226,7 +226,7 @@ class BotConfig:
     paladin_v7_cheap_hedge_slip_buffer: float = 0.012
     # Seconds after first leg before a *cheap* hedge may execute (0 = immediate when gate passes).
     paladin_v7_cheap_hedge_min_delay_sec: float = 0.0
-    paladin_v7_hedge_timeout_seconds: float = 90.0
+    paladin_v7_hedge_timeout_seconds: float = 60.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
     # After each completed pair: min wait before next layer‑2 add (replay seconds; min 5 in strategy).
     paladin_v7_layer2_cooldown_sec: float = 5.0
@@ -234,7 +234,7 @@ class BotConfig:
     paladin_v7_pair_cooldown_sec: float = 5.0
     # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
-    paladin_v7_max_shares_per_side: float = 16.0
+    paladin_v7_max_shares_per_side: float = 20.0
     # Layer 2: higher-VWAP leg's mid must be < that leg's avg minus this (tie: higher PM mid picks leg).
     paladin_v7_layer2_dip_below_avg: float = 0.05
     # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
@@ -473,7 +473,7 @@ class BotConfig:
             paladin_v7_cheap_hedge_min_delay_sec=max(
                 0.0, _env_float("BOT_PALADIN_V7_CHEAP_HEDGE_MIN_DELAY_SEC", 0.0)
             ),
-            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 90.0)),
+            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 60.0)),
             paladin_v7_forced_hedge_max_book_sum=min(
                 1.50, max(1.0, _env_float("BOT_PALADIN_V7_FORCED_HEDGE_SUM_MAX", 1.30))
             ),
@@ -488,7 +488,7 @@ class BotConfig:
                 if (os.getenv("BOT_PALADIN_V7_BASE_ORDER_SHARES") or "").strip()
                 else max(1.0, _env_float("BOT_PALADIN_V7_CLIP_SHARES", 5.0))
             ),
-            paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 16.0)),
+            paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 20.0)),
             paladin_v7_layer2_dip_below_avg=max(
                 0.0, min(0.5, _env_float("BOT_PALADIN_V7_LAYER2_DIP_BELOW_AVG", 0.05))
             ),
