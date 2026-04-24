@@ -285,9 +285,13 @@ def paladin_v7_step(
     # Same cheap / forced logic for hedges after *any* first leg (spike, -5c layer, -20c layer).
     if runner.pending_second is not None:
         side_o, sh_need, avg_first, t0 = runner.pending_second
-        # Live FAKs can leave sub-clip residue (e.g. 5.16 requested, 5.00 hedged, 0.16 left).
-        # That remainder is economically "done enough" once it is inside the balance tolerance;
-        # otherwise it would block all future layers forever because the pending path returns early.
+        # v7 now uses fixed 5-share buys in live trading. Any hedge remainder below min_shares
+        # cannot be posted to the exchange, so treat it as "done enough" and unblock the book.
+        if float(sh_need) < min_sh - 1e-9:
+            runner.pending_second = None
+            runner.last_completed_pair_elapsed = int(t)
+            return
+        # Tiny residue inside the balance tolerance is also considered complete.
         if float(sh_need) <= max(1e-6, float(p.balance_share_tolerance)):
             runner.pending_second = None
             runner.last_completed_pair_elapsed = int(t)

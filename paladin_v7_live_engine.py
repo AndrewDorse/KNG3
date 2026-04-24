@@ -216,10 +216,20 @@ class PaladinV7LiveEngine:
 
     @staticmethod
     def _decode_order_size(raw: object) -> float:
+        if isinstance(raw, str):
+            txt = raw.strip()
+            if not txt:
+                return 0.0
+            if "." in txt:
+                return PaladinV7LiveEngine._num(txt)
         val = PaladinV7LiveEngine._num(raw)
         if val <= 0.0:
             return 0.0
-        return val / 1_000_000.0
+        # Some order payloads report decimal shares directly ("4.8236"), while others use
+        # fixed-point units (e.g. 4823600). Treat large integer-like values as fixed-point.
+        if val >= 1000.0 and abs(val - round(val)) <= 1e-9:
+            return val / 1_000_000.0
+        return val
 
     @classmethod
     def _buy_fill_from_order(cls, order: dict[str, Any] | None, limit_px: float) -> tuple[float, float, float, str]:
@@ -296,8 +306,9 @@ class PaladinV7LiveEngine:
     ) -> float:
         px = float(px)
         px = round(px, 4)
+        exchange_min_shares = int(math.ceil(float(self.config.paladin_v7_min_shares)))
         size = min(int(round(float(shares))), int(round(float(self.config.paladin_v7_base_order_shares))))
-        if size <= 0 or size < int(math.ceil(min_shares)):
+        if size <= 0 or size < max(exchange_min_shares, int(math.ceil(min_shares))):
             return 0.0
         req_shares = float(size)
         notion = req_shares * px
