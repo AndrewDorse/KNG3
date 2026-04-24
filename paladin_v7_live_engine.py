@@ -66,6 +66,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         hedge_timeout_seconds=float(cfg.paladin_v7_hedge_timeout_seconds),
         forced_hedge_max_book_sum=float(cfg.paladin_v7_forced_hedge_max_book_sum),
         layer2_dip_below_avg=float(cfg.paladin_v7_layer2_dip_below_avg),
+        layer_level_offset_step=float(cfg.paladin_v7_layer_level_offset_step),
         layer2_low_vwap_dip_below_avg=float(cfg.paladin_v7_layer2_low_vwap_dip_below_avg),
         balance_share_tolerance=float(cfg.paladin_v7_balance_share_tolerance),
         imbalance_repair_max_pair_sum=float(cfg.paladin_v7_imbalance_repair_max_pair_sum),
@@ -129,6 +130,8 @@ class PaladinV7LiveEngine:
         self._active_limit_order_reason: str = ""
         self._active_limit_order_req_shares: float = 0.0
         self._active_limit_order_last_check_ts: float = 0.0
+        self._active_limit_order_cancel_requested: bool = False
+        self._active_limit_order_absent_checks: int = 0
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -283,6 +286,8 @@ class PaladinV7LiveEngine:
         self._active_limit_order_reason = str(reason)
         self._active_limit_order_req_shares = float(req_shares)
         self._active_limit_order_last_check_ts = 0.0
+        self._active_limit_order_cancel_requested = False
+        self._active_limit_order_absent_checks = 0
 
     def _clear_active_limit_order(self) -> None:
         self._active_limit_order_id = ""
@@ -290,6 +295,8 @@ class PaladinV7LiveEngine:
         self._active_limit_order_reason = ""
         self._active_limit_order_req_shares = 0.0
         self._active_limit_order_last_check_ts = 0.0
+        self._active_limit_order_cancel_requested = False
+        self._active_limit_order_absent_checks = 0
         self._limit_order_busy_until_ts = 0.0
         self._limit_order_busy_reason = ""
 
@@ -318,6 +325,7 @@ class PaladinV7LiveEngine:
                 return False
             if self._order_status_is_open(status):
                 self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                self._active_limit_order_absent_checks = 0
                 return True
         try:
             open_orders = self.trader.get_open_orders()
@@ -329,7 +337,20 @@ class PaladinV7LiveEngine:
             oid = str(od.get("id") or od.get("orderID") or od.get("order_id") or "")
             if oid == order_id:
                 self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                self._active_limit_order_absent_checks = 0
                 return True
+        self._active_limit_order_absent_checks += 1
+        if self._active_limit_order_absent_checks < 2:
+            self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 0.8)
+            return True
+        if not self._active_limit_order_cancel_requested:
+            LOGGER.warning(
+                "PALADIN v7 order %s missing from checks before cancel confirmation; holding new orders | %s",
+                order_id[:24] + "…",
+                self._active_limit_order_reason,
+            )
+            self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+            return True
         if status and not self._order_status_is_closed(status):
             LOGGER.warning(
                 "PALADIN v7 order %s unresolved after cancel check; holding new orders | %s",
@@ -497,6 +518,7 @@ class PaladinV7LiveEngine:
             time.sleep(0.25)
 
         if filled + 1e-9 < req_shares:
+            self._active_limit_order_cancel_requested = True
             cancelled = self.trader.cancel_order(order_id)
             LOGGER.info(
                 "PALADIN v7 LIMIT cancel %s oid=%s age=%.1fs cancelled=%s | %s",
@@ -788,7 +810,7 @@ class PaladinV7LiveEngine:
             return
         lighter = "down" if imb > 0 else "up"
         px = float(pm_d) if imb > 0 else float(pm_u)
-        cap = float(self.config.paladin_v7_max_shares_per_side)
+        cap = max(float(self.config.paladin_v7_max_shares_per_side), float(st.size_up), float(st.size_down))
         cur_light = float(st.size_down) if imb > 0 else float(st.size_up)
         room = max(0.0, cap - cur_light)
         need = abs(imb)
@@ -908,9 +930,14 @@ class PaladinV7LiveEngine:
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
             self._live_order_serial = 0
-            self._limit_order_busy_until_ts = 0.0
-            self._limit_order_busy_reason = ""
-            self._clear_active_limit_order()
+            if not self._active_limit_order_id:
+                self._limit_order_busy_until_ts = 0.0
+                self._limit_order_busy_reason = ""
+            else:
+                LOGGER.warning(
+                    "PALADIN v7 live: carrying unresolved order %s into new window; no new orders until resolved",
+                    self._active_limit_order_id[:24] + "…",
+                )
             self._v7_steps_fired = set()
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:

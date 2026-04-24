@@ -80,6 +80,9 @@ class PaladinV7Params:
 
     # Layer: higher-VWAP leg's mid must be < that leg's avg minus this (default 5¢).
     layer2_dip_below_avg: float = 0.05
+    # After each completed layer tier (5-5 -> 10-10 -> 15-15 ...), make the higher-VWAP dip gate
+    # and the balanced cheap-hedge price 1c stricter per tier step when nonzero.
+    layer_level_offset_step: float = 0.01
     # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
     layer2_low_vwap_dip_below_avg: float = 0.20
     # Treat |up−down| <= this (shares) as balanced for layers + spike-from-balanced (default 1.0).
@@ -98,6 +101,16 @@ class PaladinV7Runner:
     st: SimState = field(default_factory=SimState)
     pending_second: tuple[Side, float, float, int] | None = None
     last_completed_pair_elapsed: int = -1_000_000
+
+
+def _current_layer_level(st: SimState, base_order_shares: float) -> int:
+    base = max(1e-9, float(base_order_shares))
+    top = max(float(st.size_up), float(st.size_down))
+    if top <= 1e-9:
+        return 0
+    # Use the larger side so an in-flight layer hedge (e.g. 10 vs 5) already counts as the next tier.
+    tier = int(round(top / base))
+    return max(0, tier - 1)
 
 
 def load_ticks_with_btc(path: Path, *, window_sec: int = 900) -> tuple[str, list[WindowTick]]:
@@ -252,14 +265,15 @@ def _entry_shares(
     min_sh: float,
     min_notional: float,
 ) -> float:
-    """Fixed-size clip for new-risk buys; do not upscale beyond the requested clip."""
+    """Fixed-size clip for new-risk buys; require room for the whole clip."""
     cur = float(st.size_up) if side == "up" else float(st.size_down)
     room = float(cap) - cur
-    if room < min_sh - 1e-9:
+    desired = float(desired_shares)
+    if room < float(min_sh) - 1e-9:
         return 0.0
-    sh = min(float(desired_shares), room)
-    if sh < float(min_sh) - 1e-9:
+    if room + 1e-9 < desired:
         return 0.0
+    sh = desired
     if sh * float(px) + 1e-9 < float(min_notional):
         return 0.0
     return sh
@@ -283,6 +297,10 @@ def paladin_v7_step(
     su, sd = float(st.size_up), float(st.size_down)
     gap_now = abs(su - sd)
     flat_now = su <= 1e-9 and sd <= 1e-9
+    layer_level = _current_layer_level(st, base_sz)
+    layer_offset_step = max(0.0, float(p.layer_level_offset_step))
+    dynamic_layer_dip = max(0.0, float(p.layer2_dip_below_avg) + layer_level * layer_offset_step)
+    dynamic_balance_dip = max(0.0, 0.05 + layer_level * layer_offset_step)
     # Universal balance engine: if the live book is materially imbalanced, the next action must be
     # on the lighter side. Use one pending path for first hedge and later re-balancing.
     if runner.pending_second is None and (not flat_now) and gap_now + 1e-9 >= min_sh:
@@ -315,13 +333,13 @@ def paladin_v7_step(
         # Universal cheap-price rule:
         # - first hedge from one-sided inventory: keep pair-cost cap logic (<0.96 held+opp+slip)
         # - re-balancing when both sides already exist: only buy the smaller side on a better price
-        #   than its own average by 5c
+        #   than its own average by 5c, plus any configured per-tier offset step
         min_cheap_age = max(0.0, float(p.cheap_hedge_min_delay_sec))
         ok_cheap = False
         px_limit = float(px_o)
         if both_nonflat:
             avg_small = float(st.avg_up) if side_o == "up" else float(st.avg_down)
-            px_limit = max(0.01, avg_small - 0.05)
+            px_limit = max(0.01, avg_small - dynamic_balance_dip)
             ok_cheap = (age + 1e-9 >= min_cheap_age) and (px_o + 1e-9 <= px_limit)
         else:
             slip = max(0.0, float(p.cheap_hedge_slip_buffer))
@@ -337,7 +355,8 @@ def paladin_v7_step(
             # Balance with one order at a time, but when the imbalance is >= 5 shares, target the full gap.
             hedge_target = float(cur_gap)
             hedge_min_sh = min_sh
-            sh_exec = _clamp_shares(st, side_o, hedge_target, p.max_shares_per_side, hedge_min_sh)
+            balance_cap = max(float(p.max_shares_per_side), su, sd)
+            sh_exec = _clamp_shares(st, side_o, hedge_target, balance_cap, hedge_min_sh)
             if sh_exec >= hedge_min_sh - 1e-9:
                 # If mid*shares < CLOB min notional (e.g. $1), still complete the hedge in sim.
                 hedge_mn = float(p.min_notional)
@@ -448,7 +467,7 @@ def paladin_v7_step(
 
     if balanced and both and (float(t) - float(runner.last_completed_pair_elapsed)) >= l2_cd:
         hi = _higher_vwap_side(st, pm_u, pm_d)
-        if _try_layer_dip(hi, float(p.layer2_dip_below_avg), "v7_layer2_dip_lead"):
+        if _try_layer_dip(hi, dynamic_layer_dip, "v7_layer2_dip_lead"):
             return
         lo = _lower_vwap_side(st, pm_u, pm_d)
         if _try_layer_dip(lo, float(p.layer2_low_vwap_dip_below_avg), "v7_layer2_lowvwap_dip"):

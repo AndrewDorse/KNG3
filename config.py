@@ -237,6 +237,8 @@ class BotConfig:
     paladin_v7_max_shares_per_side: float = 20.0
     # Layer 2: higher-VWAP leg's mid must be < that leg's avg minus this (tie: higher PM mid picks leg).
     paladin_v7_layer2_dip_below_avg: float = 0.05
+    # Tighten the higher-VWAP layer gate and balanced cheap-hedge price by this amount per tier.
+    paladin_v7_layer_level_offset_step: float = 0.01
     # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
     paladin_v7_layer2_low_vwap_dip_below_avg: float = 0.20
     # |up−down| <= this (shares) counts as balanced for extra layers + spike-from-balanced (default 1.0).
@@ -491,6 +493,9 @@ class BotConfig:
             paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 20.0)),
             paladin_v7_layer2_dip_below_avg=max(
                 0.0, min(0.5, _env_float("BOT_PALADIN_V7_LAYER2_DIP_BELOW_AVG", 0.05))
+            ),
+            paladin_v7_layer_level_offset_step=max(
+                0.0, min(0.1, _env_float("BOT_PALADIN_V7_LAYER_LEVEL_OFFSET_STEP", 0.01))
             ),
             paladin_v7_layer2_low_vwap_dip_below_avg=max(
                 0.0, min(0.95, _env_float("BOT_PALADIN_V7_LAYER2_LOW_VWAP_DIP_BELOW_AVG", 0.20))
