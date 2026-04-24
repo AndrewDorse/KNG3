@@ -386,13 +386,13 @@ class PaladinV7LiveEngine:
                 time.sleep(0.25)
                 continue
             filled, spent, avg_px, status = self._buy_fill_from_order(order_state, px)
+            # Keep the order lifecycle closed for the full cancel window unless the requested clip
+            # is completely filled. Partial fills must not unlock another order 1-2 seconds later.
             if filled + 1e-9 >= req_shares:
-                break
-            if status in {"matched", "filled", "canceled", "cancelled", "unmatched"}:
                 break
             time.sleep(0.25)
 
-        if status not in {"matched", "filled", "canceled", "cancelled", "unmatched"}:
+        if filled + 1e-9 < req_shares:
             cancelled = self.trader.cancel_order(order_id)
             LOGGER.info(
                 "PALADIN v7 LIMIT cancel %s oid=%s age=%.1fs cancelled=%s | %s",
