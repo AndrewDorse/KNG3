@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: confirm-reconcile balance repair, no stale post-buy trims, and >4-share rebalance triggers.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v8-reconcile-balance-fix
+# Sync from kng_bot3: side-aware VWAP rebalance gate, inclusive thresholds, and no spike-based add path.
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v8-vwap-balance-side-fix
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
