@@ -10,8 +10,7 @@ are not fired twice in the same second (duplicate FAKs). A **set** of fired ``el
 ``pending_second`` is re-read **after** reconcile so cutoff/entry-delay gates match post-sync state.
 When rebuilding pending from inventory, **preserve** the prior hedge ``t0`` for the same hedge side so
 ``hedge_timeout_seconds`` is not reset every reconcile (that stranded cheap-failing hedges).
-FAK POST+confirm stays serialized in
-``PolymarketTrader`` via a lock.
+Live buy POSTs stay serialized in ``PolymarketTrader`` via a lock.
 """
 
 from __future__ import annotations
@@ -98,7 +97,7 @@ def _build_ticks(
 
 
 class PaladinV7LiveEngine:
-    """Continuous BTC 15m PALADIN v7: Binance volume spike + BTC impulse → FAK legs."""
+    """Continuous BTC 15m PALADIN v7: Binance volume spike + BTC impulse -> timed limit-buy legs."""
 
     def __init__(self, config: BotConfig, locator: GammaMarketLocator, trader: PolymarketTrader) -> None:
         self.config = config
@@ -169,6 +168,10 @@ class PaladinV7LiveEngine:
             int(self.config.paladin_v7_reconcile_confirm_reads),
             self.config.paladin_v7_reconcile_flatten,
         )
+        LOGGER.info(
+            "PALADIN v7 order mode | buy_type=limit cancel_after=%.1fs",
+            float(self.config.paladin_v7_limit_order_cancel_seconds),
+        )
         while not self._stop:
             self._loop_once()
             time.sleep(max(0.05, float(self.config.poll_interval_seconds)))
@@ -202,96 +205,50 @@ class PaladinV7LiveEngine:
         ask = self.trader.get_best_ask(tm.token_id)
         return float(ask) if ask is not None and ask > 0 else None
 
-    def _live_buy(
+    @staticmethod
+    def _num(raw: object) -> float:
+        try:
+            if raw in (None, ""):
+                return 0.0
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _decode_order_size(raw: object) -> float:
+        val = PaladinV7LiveEngine._num(raw)
+        if val <= 0.0:
+            return 0.0
+        return val / 1_000_000.0
+
+    @classmethod
+    def _buy_fill_from_order(cls, order: dict[str, Any] | None, limit_px: float) -> tuple[float, float, float, str]:
+        if not isinstance(order, dict):
+            return 0.0, 0.0, 0.0, ""
+        status = str(order.get("status") or "").lower()
+        taking = cls._num(order.get("takingAmount")) or cls._num(order.get("taking_amount"))
+        making = cls._num(order.get("makingAmount")) or cls._num(order.get("making_amount"))
+        if taking > 1e-9 and making >= 0.0:
+            avg_px = making / taking if taking > 1e-9 else float(limit_px)
+            return taking, making, avg_px, status
+        matched = cls._decode_order_size(order.get("size_matched"))
+        if matched > 1e-9:
+            px_lim = cls._num(order.get("price")) or float(limit_px)
+            return matched, matched * px_lim, px_lim, status
+        return 0.0, 0.0, 0.0, status
+
+    def _apply_live_buy_fill(
         self,
-        contract: ActiveContract,
         st: SimState,
         *,
         t: int,
         side: str,
-        shares: float,
-        px: float,
+        filled: float,
+        avg_px: float,
+        spent: float,
         reason: str,
-        budget: float,
-        min_notional: float,
-        min_shares: float,
-    ) -> float:
-        px = float(px)
-        # Raise FAK cap vs signal mid so CLOB can match (cheap gate uses the same buffer in pair_held_quote_sum).
-        if str(reason).startswith("v7_"):
-            px = min(0.99, px + float(self.config.paladin_v7_cheap_hedge_slip_buffer))
-        px = round(px, 4)
-        notion = shares * px
-        if shares < min_shares - 1e-9 or notion < min_notional - 1e-9:
-            LOGGER.info(
-                "PALADIN v7 skip BUY %s shares=%.4f px=%.4f notion=$%.2f reason=%s "
-                "(min_shares=%.4f min_notional=%.2f)",
-                side.upper(),
-                shares,
-                px,
-                notion,
-                reason,
-                min_shares,
-                min_notional,
-            )
-            return 0.0
-        size = int(round(shares))
-        if size < int(math.ceil(min_shares)):
-            return 0.0
-        tok = contract.up if side == "up" else contract.down
-        if self.config.dry_run:
-            LOGGER.info(
-                "[PALADIN v7 dry_run] BUY %s size=%d @ %.4f (%s) ~$%.2f",
-                side.upper(),
-                size,
-                px,
-                reason,
-                notion,
-            )
-            return sim_try_buy(
-                st,
-                t=t,
-                side=side,  # type: ignore[arg-type]
-                shares=float(size),
-                px=px,
-                reason=reason,
-                budget=budget,
-                min_notional=min_notional,
-                min_shares=min_shares,
-            )
-        self._live_order_serial += 1
-        try:
-            res = self.trader.place_marketable_buy_with_result(
-                tok,
-                px,
-                size,
-                confirm_get_order=self.config.polymarket_fak_confirm_get_order,
-            )
-        except PolyApiException as exc:
-            LOGGER.warning("PALADIN v7 FAK POST rejected %s %s @ %.4f: %s", side, size, px, exc)
-            return 0.0
-        except Exception as exc:
-            LOGGER.warning("PALADIN v7 live BUY failed %s %s @ %.4f: %s", side, size, px, exc)
-            return 0.0
-
-        if not res.matched_any:
-            LOGGER.warning(
-                "PALADIN v7 FAK no fill | status=%s err=%s oid=%s",
-                res.status,
-                res.error,
-                (res.order_id[:20] + "…") if res.order_id else "",
-            )
-            return 0.0
-
-        filled = float(res.filled_shares)
-        avg_px = float(res.avg_price) if res.avg_price > 0 else px
-        spent = float(res.filled_usdc) if res.filled_usdc > 1e-9 else filled * avg_px
-        if filled <= 1e-9:
-            return 0.0
-        if not _can_afford_live(st.spent_usdc, spent, budget):
-            LOGGER.warning("PALADIN v7: fill would exceed budget; skipping state update (filled=%.4f)", filled)
-            return 0.0
-
+        order_id: str,
+    ) -> None:
         su, au, sd, ad = apply_buy_fill(
             st.size_up,
             st.avg_up,
@@ -314,15 +271,163 @@ class PaladinV7LiveEngine:
             )
         )
         LOGGER.info(
-            "PALADIN v7 FAK filled %s %.4f sh @ %.4f ($%.2f) | %s | oid=%s",
+            "PALADIN v7 LIMIT filled %s %.4f sh @ %.4f ($%.2f) | %s | oid=%s",
             side.upper(),
             filled,
             avg_px,
             spent,
             reason,
-            (res.order_id[:24] + "…") if res.order_id else "?",
+            (order_id[:24] + "…") if order_id else "?",
         )
-        self._align_leg_to_api_after_fak(contract, st, t=t, side=side, px_hint=avg_px)
+
+    def _live_buy(
+        self,
+        contract: ActiveContract,
+        st: SimState,
+        *,
+        t: int,
+        side: str,
+        shares: float,
+        px: float,
+        reason: str,
+        budget: float,
+        min_notional: float,
+        min_shares: float,
+    ) -> float:
+        px = float(px)
+        px = round(px, 4)
+        size = min(int(round(float(shares))), int(round(float(self.config.paladin_v7_base_order_shares))))
+        if size <= 0 or size < int(math.ceil(min_shares)):
+            return 0.0
+        req_shares = float(size)
+        notion = req_shares * px
+        if req_shares < min_shares - 1e-9 or notion < min_notional - 1e-9:
+            LOGGER.info(
+                "PALADIN v7 skip BUY %s shares=%.4f px=%.4f notion=$%.2f reason=%s "
+                "(min_shares=%.4f min_notional=%.2f)",
+                side.upper(),
+                req_shares,
+                px,
+                notion,
+                reason,
+                min_shares,
+                min_notional,
+            )
+            return 0.0
+        tok = contract.up if side == "up" else contract.down
+        if self.config.dry_run:
+            LOGGER.info(
+                "[PALADIN v7 dry_run] BUY %s size=%d @ %.4f (%s) ~$%.2f",
+                side.upper(),
+                size,
+                px,
+                reason,
+                notion,
+            )
+            return sim_try_buy(
+                st,
+                t=t,
+                side=side,  # type: ignore[arg-type]
+                shares=float(size),
+                px=px,
+                reason=reason,
+                budget=budget,
+                min_notional=min_notional,
+                min_shares=min_shares,
+            )
+        api_before = 0.0
+        try:
+            api_before = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 pre-buy balance read skipped: %s", exc)
+        self._live_order_serial += 1
+        order_id = ""
+        try:
+            res = self.trader.place_limit_buy(
+                tok,
+                px,
+                size,
+            )
+        except PolyApiException as exc:
+            LOGGER.warning("PALADIN v7 LIMIT POST rejected %s %s @ %.4f: %s", side, size, px, exc)
+            return 0.0
+        except Exception as exc:
+            LOGGER.warning("PALADIN v7 live limit BUY failed %s %s @ %.4f: %s", side, size, px, exc)
+            return 0.0
+        if isinstance(res, dict):
+            order_id = str(res.get("orderID") or res.get("order_id") or res.get("id") or "")
+        if not order_id:
+            LOGGER.warning("PALADIN v7 LIMIT post missing order id | %s %s @ %.4f | %s", side, size, px, reason)
+            return 0.0
+
+        cancel_after = float(self.config.paladin_v7_limit_order_cancel_seconds)
+        deadline = time.time() + cancel_after
+        order_state: dict[str, Any] | None = None
+        filled = 0.0
+        spent = 0.0
+        avg_px = 0.0
+        status = ""
+        while time.time() < deadline:
+            try:
+                order_state = self.trader.get_order(order_id)
+            except Exception as exc:
+                LOGGER.debug("PALADIN v7 get_order %s before cancel: %s", order_id[:18], exc)
+                time.sleep(0.25)
+                continue
+            filled, spent, avg_px, status = self._buy_fill_from_order(order_state, px)
+            if filled + 1e-9 >= req_shares:
+                break
+            if status in {"matched", "filled", "canceled", "cancelled", "unmatched"}:
+                break
+            time.sleep(0.25)
+
+        if status not in {"matched", "filled", "canceled", "cancelled", "unmatched"}:
+            cancelled = self.trader.cancel_order(order_id)
+            LOGGER.info(
+                "PALADIN v7 LIMIT cancel %s oid=%s age=%.1fs cancelled=%s | %s",
+                side.upper(),
+                order_id[:24] + "…",
+                cancel_after,
+                cancelled,
+                reason,
+            )
+            time.sleep(0.25)
+        try:
+            order_state = self.trader.get_order(order_id)
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 get_order %s after cancel: %s", order_id[:18], exc)
+        filled, spent, avg_px, status = self._buy_fill_from_order(order_state, px)
+        if filled <= 1e-9:
+            try:
+                api_after = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
+            except Exception as exc:
+                LOGGER.debug("PALADIN v7 post-buy balance read skipped: %s", exc)
+                api_after = api_before
+            delta_api = max(0.0, api_after - api_before)
+            if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
+                filled = delta_api
+                avg_px = px
+                spent = filled * avg_px
+        if filled <= 1e-9:
+            return 0.0
+        if not _can_afford_live(st.spent_usdc, spent, budget):
+            LOGGER.warning("PALADIN v7: fill would exceed budget; skipping state update (filled=%.4f)", filled)
+            return 0.0
+        if avg_px <= 1e-9:
+            avg_px = px
+        if spent <= 1e-9:
+            spent = filled * avg_px
+        self._apply_live_buy_fill(
+            st,
+            t=t,
+            side=side,
+            filled=filled,
+            avg_px=avg_px,
+            spent=spent,
+            reason=reason,
+            order_id=order_id,
+        )
+        self._align_leg_to_api_after_live_buy(contract, st, t=t, side=side, px_hint=avg_px)
         return filled
 
     @staticmethod
@@ -341,18 +446,18 @@ class PaladinV7LiveEngine:
 
     @staticmethod
     def _latest_exec_fill_price(st: SimState, side: str) -> float | None:
-        """Last non-reconcile trade price for ``side`` (actual FAK VWAP), for reconcile economics."""
+        """Last non-reconcile trade price for ``side`` (actual live buy VWAP), for reconcile economics."""
         for tr in reversed(st.trades):
             if str(tr.side) != side:
                 continue
             r = str(tr.reason)
-            if "v7_api_reconcile_sync" in r or "v7_post_fak_api_sync" in r:
+            if "v7_api_reconcile_sync" in r or "v7_post_buy_api_sync" in r:
                 continue
             if float(tr.price) > 1e-9:
                 return float(tr.price)
         return None
 
-    def _align_leg_to_api_after_fak(
+    def _align_leg_to_api_after_live_buy(
         self,
         contract: ActiveContract,
         st: SimState,
@@ -375,7 +480,7 @@ class PaladinV7LiveEngine:
             try:
                 api = float(self.trader.token_balance_allowance_refreshed(tok.token_id))
             except Exception as exc:
-                LOGGER.debug("post-FAK balance read skipped: %s", exc)
+                LOGGER.debug("post-buy balance read skipped: %s", exc)
                 return
             if api > 0.25 or abs(api - cur) <= tol:
                 break
@@ -383,10 +488,10 @@ class PaladinV7LiveEngine:
                 break
 
         ms = float(self.config.paladin_v7_min_shares)
-        # CLOB balances often lag right after a FAK; API=0 with model>0 would incorrectly zero the leg.
+        # CLOB balances often lag right after a buy; API=0 with model>0 would incorrectly zero the leg.
         if cur + 1e-9 >= ms and api < 0.25:
             LOGGER.warning(
-                "PALADIN v7 post-FAK: skip API align %s (API=%.4f vs model=%.4f; likely stale balance read)",
+                "PALADIN v7 post-buy: skip API align %s (API=%.4f vs model=%.4f; likely stale balance read)",
                 side.upper(),
                 api,
                 cur,
@@ -399,7 +504,7 @@ class PaladinV7LiveEngine:
         if delta < -tol:
             if cur + 1e-9 >= ms and api < 1.0:
                 LOGGER.warning(
-                    "PALADIN v7 post-FAK: refuse trim %s (API=%.4f vs model=%.4f; likely stale)",
+                    "PALADIN v7 post-buy: refuse trim %s (API=%.4f vs model=%.4f; likely stale)",
                     side.upper(),
                     api,
                     cur,
@@ -410,7 +515,7 @@ class PaladinV7LiveEngine:
             self._shrink_leg(st, side, remove)
             st.spent_usdc = max(0.0, float(st.spent_usdc) - remove * prev_avg)
             LOGGER.warning(
-                "PALADIN v7 post-FAK API trim %s by %.4f sh (API %.4f vs model %.4f)",
+                "PALADIN v7 post-buy API trim %s by %.4f sh (API %.4f vs model %.4f)",
                 side.upper(),
                 remove,
                 api,
@@ -436,11 +541,11 @@ class PaladinV7LiveEngine:
                 float(delta),
                 float(px_hint),
                 notion,
-                "v7_post_fak_api_sync|live",
+                "v7_post_buy_api_sync|live",
             )
         )
         LOGGER.warning(
-            "PALADIN v7 post-FAK API add %s +%.4f sh @ %.4f (API %.4f vs model %.4f)",
+            "PALADIN v7 post-buy API add %s +%.4f sh @ %.4f (API %.4f vs model %.4f)",
             side.upper(),
             delta,
             float(px_hint),

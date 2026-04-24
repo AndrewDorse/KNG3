@@ -245,6 +245,7 @@ class BotConfig:
     paladin_v7_imbalance_repair_max_pair_sum: float = 0.97
     paladin_v7_min_notional: float = 1.0
     paladin_v7_min_shares: float = 5.0
+    paladin_v7_limit_order_cancel_seconds: float = 5.0
     # Live: poll CLOB conditional balances vs SimState; debounce to tolerate API delay.
     paladin_v7_reconcile_enabled: bool = True
     paladin_v7_reconcile_interval_seconds: float = 5.0
@@ -502,6 +503,9 @@ class BotConfig:
             ),
             paladin_v7_min_notional=max(0.01, _env_float("BOT_PALADIN_V7_MIN_NOTIONAL", 1.0)),
             paladin_v7_min_shares=max(1.0, _env_float("BOT_PALADIN_V7_MIN_SHARES", 5.0)),
+            paladin_v7_limit_order_cancel_seconds=max(
+                1.0, _env_float("BOT_PALADIN_V7_LIMIT_ORDER_CANCEL_SEC", 5.0)
+            ),
             paladin_v7_reconcile_enabled=_env_bool("BOT_PALADIN_V7_RECONCILE_ENABLED", True),
             paladin_v7_reconcile_interval_seconds=max(
                 2.0, _env_float("BOT_PALADIN_V7_RECONCILE_INTERVAL_SEC", 5.0)

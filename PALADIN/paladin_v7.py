@@ -309,10 +309,11 @@ def paladin_v7_step(
         ok_forced = forced
 
         if ok_cheap or ok_forced:
-            # Cleanup hedges are allowed below the normal clip minimum; otherwise a 1-4 share
-            # remainder can never be worked down in live trading.
-            hedge_min_sh = 1.0 if float(sh_need) < min_sh - 1e-9 else min_sh
-            sh_exec = _clamp_shares(st, side_o, sh_need, p.max_shares_per_side, hedge_min_sh)
+            # Hedge buys follow the same clip system as every other buy: cap each request at base_sz.
+            # Small cleanup residue may still use a smaller clip so a nearly-complete pair is not stranded forever.
+            hedge_target = min(float(base_sz), float(sh_need))
+            hedge_min_sh = 1.0 if hedge_target < min_sh - 1e-9 else min_sh
+            sh_exec = _clamp_shares(st, side_o, hedge_target, p.max_shares_per_side, hedge_min_sh)
             if sh_exec >= hedge_min_sh - 1e-9:
                 # If mid*shares < CLOB min notional (e.g. $1), still complete the hedge in sim.
                 hedge_mn = float(p.min_notional)

@@ -9,7 +9,8 @@ Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pai
 - **Flat**: no UP and no DOWN inventory.
 - **Balanced**: `|size_up − size_down| ≤ balance_share_tolerance` (default 1 share).
 - **Both-sided enough for layers**: `min(size_up, size_down) ≥ max(0, min_shares − balance_share_tolerance)` (e.g. 4.5 vs 5.5 with min_shares 5 and tol 1).
-- **Clip size**: normal new-risk buys use the fixed `base_order_shares` clip (currently 5). Hedges may be smaller only to clean up a leftover remainder.
+- **Clip size**: normal new-risk buys use the fixed `base_order_shares` clip (currently 5). Larger hedge needs are worked one clip at a time; only a small leftover cleanup hedge may be smaller.
+- **Live execution**: v7 buy orders are live **limit buys** placed at the chosen target price and canceled after `paladin_v7_limit_order_cancel_seconds` (default 5s).
 
 ---
 

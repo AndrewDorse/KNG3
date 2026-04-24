@@ -58,6 +58,10 @@ def main() -> int:
         float(config.paladin_v7_hedge_timeout_seconds),
         float(config.paladin_v7_cheap_hedge_slip_buffer),
     )
+    LOGGER.info(
+        "paladin_v7 order = buy_type=limit cancel_after=%.1fs",
+        float(config.paladin_v7_limit_order_cancel_seconds),
+    )
     LOGGER.info("market       = %s", config.market_slug_prefix)
     LOGGER.info("shares/order = %d", config.shares_per_level)
     LOGGER.info("budget cap   = $%.2f", config.strategy_budget_cap_usdc)
@@ -77,7 +81,7 @@ def main() -> int:
     if config.dry_run:
         LOGGER.warning("PALADIN v7: POLY_DRY_RUN=true — paper only (no CLOB orders).")
     else:
-        LOGGER.warning("PALADIN v7: LIVE — FAK buys will execute on Polymarket. Ctrl+C stops the loop.")
+        LOGGER.warning("PALADIN v7: LIVE — limit buys will post to Polymarket and cancel after %.1fs. Ctrl+C stops the loop.", float(config.paladin_v7_limit_order_cancel_seconds))
     PaladinV7LiveEngine(config, locator, trader).run()
     return 0
 

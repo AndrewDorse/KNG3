@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: 5-share cap on first legs / layers / repair, plus single-shot FAK POSTs.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-redeploy-fixed5-cap
+# Sync from kng_bot3: fixed 5-share buy sizing plus 5-second limit-buy cancel flow.
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-limit5s-fixed5
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

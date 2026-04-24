@@ -188,17 +188,18 @@ class PolymarketTrader:
         Order submissions are intentionally not retried automatically. If the network drops
         after POST, the exchange may still have accepted the order; retrying can double-fill.
         """
-        order_kwargs: dict[str, Any] = {
-            "token_id": token.token_id,
-            "price": round(price, 2),
-            "size": float(size),
-            "side": BUY,
-        }
-        if fee_rate_bps is not None:
-            order_kwargs["fee_rate_bps"] = fee_rate_bps
-        order = OrderArgs(**order_kwargs)
-        signed = self.client.create_order(order)
-        return self.client.post_order(signed, OrderType.GTC, post_only=post_only)
+        with self._taker_order_lock:
+            order_kwargs: dict[str, Any] = {
+                "token_id": token.token_id,
+                "price": round(price, 2),
+                "size": float(size),
+                "side": BUY,
+            }
+            if fee_rate_bps is not None:
+                order_kwargs["fee_rate_bps"] = fee_rate_bps
+            order = OrderArgs(**order_kwargs)
+            signed = self.client.create_order(order)
+            return self.client.post_order(signed, OrderType.GTC, post_only=post_only)
 
     def place_marketable_buy(
         self,
@@ -347,6 +348,11 @@ class PolymarketTrader:
         except Exception as exc:
             LOGGER.debug("Cancel failed %s: %s", order_id, exc)
             return False
+
+    @_retry()
+    def get_order(self, order_id: str) -> dict[str, Any]:
+        """Fetch one order by ID."""
+        return self.client.get_order(order_id)
 
     def cancel_all_orders(self, open_orders: list[dict[str, Any]] | None = None) -> int:
         """Cancel all open orders. If open_orders not provided, fetches them first.
