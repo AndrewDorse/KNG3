@@ -297,13 +297,14 @@ def paladin_v7_step(
     su, sd = float(st.size_up), float(st.size_down)
     gap_now = abs(su - sd)
     flat_now = su <= 1e-9 and sd <= 1e-9
+    balance_order_gap_trigger = max(0.0, min_sh - 1.0)
     layer_level = _current_layer_level(st, base_sz)
     layer_offset_step = max(0.0, float(p.layer_level_offset_step))
     dynamic_layer_dip = max(0.0, float(p.layer2_dip_below_avg) + layer_level * layer_offset_step)
     dynamic_balance_dip = max(0.0, 0.05 + layer_level * layer_offset_step)
     # Universal balance engine: if the live book is materially imbalanced, the next action must be
     # on the lighter side. Use one pending path for first hedge and later re-balancing.
-    if runner.pending_second is None and (not flat_now) and gap_now + 1e-9 >= min_sh:
+    if runner.pending_second is None and (not flat_now) and gap_now > balance_order_gap_trigger + 1e-9:
         if su > sd + 1e-9:
             runner.pending_second = ("down", gap_now, float(st.avg_up), int(t))
         elif sd > su + 1e-9:
@@ -316,8 +317,8 @@ def paladin_v7_step(
         su, sd = float(st.size_up), float(st.size_down)
         cur_gap = abs(su - sd)
         both_nonflat = su > 1e-9 and sd > 1e-9
-        # The universal balance engine only acts on real, exchange-eligible imbalances.
-        if cur_gap < min_sh - 1e-9:
+        # If the remaining skew is 4 shares or less, do not keep forcing 5-share rebalance clips.
+        if cur_gap <= balance_order_gap_trigger + 1e-9:
             runner.pending_second = None
             runner.last_completed_pair_elapsed = int(t)
             return
@@ -353,7 +354,7 @@ def paladin_v7_step(
 
         if ok_cheap or ok_forced:
             # Balance with one order at a time, but when the imbalance is >= 5 shares, target the full gap.
-            hedge_target = float(cur_gap)
+            hedge_target = max(float(cur_gap), min_sh)
             hedge_min_sh = min_sh
             balance_cap = max(float(p.max_shares_per_side), su, sd)
             sh_exec = _clamp_shares(st, side_o, hedge_target, balance_cap, hedge_min_sh)

@@ -609,7 +609,7 @@ class PaladinV7LiveEngine:
         side: str,
         px_hint: float,
     ) -> None:
-        """One refresh vs CLOB balance for the bought token; trim or add model shares if drift exceeds tolerance."""
+        """One refresh vs CLOB balance for the bought token; only add missing shares immediately after a buy."""
         tok = contract.up if side == "up" else contract.down
         tol = float(self.config.paladin_v7_reconcile_share_tolerance)
         cur = float(st.size_up) if side == "up" else float(st.size_down)
@@ -645,22 +645,9 @@ class PaladinV7LiveEngine:
         if abs(delta) <= tol:
             return
         if delta < -tol:
-            if cur + 1e-9 >= ms and api < 1.0:
-                LOGGER.warning(
-                    "PALADIN v7 post-buy: refuse trim %s (API=%.4f vs model=%.4f; likely stale)",
-                    side.upper(),
-                    api,
-                    cur,
-                )
-                return
-            remove = -delta
-            prev_avg = float(st.avg_up) if side == "up" else float(st.avg_down)
-            self._shrink_leg(st, side, remove)
-            st.spent_usdc = max(0.0, float(st.spent_usdc) - remove * prev_avg)
             LOGGER.warning(
-                "PALADIN v7 post-buy API trim %s by %.4f sh (API %.4f vs model %.4f)",
+                "PALADIN v7 post-buy: skip trim %s (API %.4f vs model %.4f; wait for reconcile confirm)",
                 side.upper(),
-                remove,
                 api,
                 cur,
             )
