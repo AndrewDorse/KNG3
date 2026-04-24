@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass, field
-import math
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -89,9 +88,9 @@ class PaladinV7Params:
     imbalance_repair_max_pair_sum: float = 0.97
 
     # Seconds after a completed pair before the next layer‑2 *add* may fire (default 1; min 1 replay second).
-    layer2_cooldown_sec: float = 1.0
+    layer2_cooldown_sec: float = 5.0
     # Seconds after a completed pair before a new Binance spike first leg when balanced (default 1).
-    pair_cooldown_sec: float = 1.0
+    pair_cooldown_sec: float = 5.0
 
 
 @dataclass(slots=True)
@@ -253,17 +252,15 @@ def _entry_shares(
     min_sh: float,
     min_notional: float,
 ) -> float:
-    """Clip for new-risk buys; upsizes only when needed to satisfy the exchange min notional."""
+    """Fixed-size clip for new-risk buys; do not upscale beyond the requested clip."""
     cur = float(st.size_up) if side == "up" else float(st.size_down)
     room = float(cap) - cur
     if room < min_sh - 1e-9:
         return 0.0
-    need = max(float(desired_shares), float(min_sh))
-    if px > 1e-9 and min_notional > 1e-9:
-        # Live FAK rounds to integer shares, so ceil here keeps sim/live intent aligned.
-        need = max(need, float(math.ceil(float(min_notional) / float(px) - 1e-9)))
-    sh = min(need, room)
-    if sh < min_sh - 1e-9:
+    sh = min(float(desired_shares), room)
+    if sh < float(min_sh) - 1e-9:
+        return 0.0
+    if sh * float(px) + 1e-9 < float(min_notional):
         return 0.0
     return sh
 
@@ -404,7 +401,7 @@ def paladin_v7_step(
             sh_rep = _entry_shares(
                 st,
                 light,
-                gap,
+                min(gap, base_sz),
                 px=pm_l,
                 cap=p.max_shares_per_side,
                 min_sh=min_sh,
@@ -426,7 +423,7 @@ def paladin_v7_step(
                     return
 
     # --- Extra layers: higher-VWAP dip, then lower-VWAP deep dip, then Binance spike (one fill → return) ---
-    l2_cd = max(1.0, float(p.layer2_cooldown_sec))
+    l2_cd = max(5.0, float(p.layer2_cooldown_sec))
 
     def _try_layer_dip(side: Side, dip_below_avg: float, reason: str) -> bool:
         px_s = pm_u if side == "up" else pm_d
@@ -479,7 +476,7 @@ def paladin_v7_step(
     can_open = flat or (balanced and both)
     if not can_open:
         return
-    pair_cd = max(1.0, float(p.pair_cooldown_sec))
+    pair_cd = max(5.0, float(p.pair_cooldown_sec))
     if float(t) - float(runner.last_completed_pair_elapsed) < pair_cd and not flat:
         return
 

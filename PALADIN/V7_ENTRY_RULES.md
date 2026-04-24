@@ -9,7 +9,7 @@ Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pai
 - **Flat**: no UP and no DOWN inventory.
 - **Balanced**: `|size_up − size_down| ≤ balance_share_tolerance` (default 1 share).
 - **Both-sided enough for layers**: `min(size_up, size_down) ≥ max(0, min_shares − balance_share_tolerance)` (e.g. 4.5 vs 5.5 with min_shares 5 and tol 1).
-- **Clip size**: `base_order_shares` (capped by `max_shares_per_side` and `min_shares`).
+- **Clip size**: normal new-risk buys use the fixed `base_order_shares` clip (currently 5). Hedges may be smaller only to clean up a leftover remainder.
 
 ---
 
@@ -39,7 +39,7 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 
 **Buy:** The side with the **higher Polymarket mid** right now (`_lead_side`).
 
-**Size:** `base_order_shares`, upsized only if needed to satisfy `min_notional` and room allows.
+**Size:** fixed `base_order_shares` clip.
 
 **After fill:** Set `pending_second` for the opposite hedge. No BTC spike is required.
 
@@ -49,7 +49,7 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 
 **When:** Not flat, not balanced (`|Δ| > tolerance`), and no `pending_second` block ran this second.
 
-**Buy:** Lighter side, up to the gap, if `pm_light + avg(heavy) < imbalance_repair_max_pair_sum` (default 0.97).
+**Buy:** Lighter side, up to one `base_order_shares` clip, if `pm_light + avg(heavy) < imbalance_repair_max_pair_sum` (default 0.97).
 
 **Reason:** `v7_imbalance_repair`. Does **not** set `pending_second`.
 
@@ -64,7 +64,7 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 1. **Higher‑VWAP dip** (`v7_layer2_dip_lead`)  
    - Leg = side with **higher** held VWAP (tie → higher PM mid).  
    - **Condition:** that side’s mid **<** its own VWAP − `layer2_dip_below_avg` (default 0.05).  
-   - **Size:** `base_order_shares` (clamped). Then set `pending_second` for the **opposite** hedge.
+   - **Size:** fixed `base_order_shares` clip. Then set `pending_second` for the **opposite** hedge.
 
 2. **Lower‑VWAP deep dip** (`v7_layer2_lowvwap_dip`)  
    - Leg = **lower** held VWAP (tie → opposite of PM lead).  
@@ -89,7 +89,7 @@ Age ≥ `hedge_timeout_seconds` (default 90s).
 
 **PM gate:** chosen side’s mid ≤ `first_leg_max_pm` (default 0.62).
 
-**Size:** `base_order_shares` clamped; then set `pending_second` for opposite hedge.
+**Size:** fixed `base_order_shares` clip; then set `pending_second` for opposite hedge.
 
 ---
 

@@ -228,10 +228,10 @@ class BotConfig:
     paladin_v7_cheap_hedge_min_delay_sec: float = 0.0
     paladin_v7_hedge_timeout_seconds: float = 90.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
-    # After each completed pair: min wait before next layer‑2 add (replay seconds; min 1 in strategy).
-    paladin_v7_layer2_cooldown_sec: float = 1.0
-    # After each completed pair: min wait before next Binance spike first leg when balanced (min 1s in from_env).
-    paladin_v7_pair_cooldown_sec: float = 1.0
+    # After each completed pair: min wait before next layer‑2 add (replay seconds; min 5 in strategy).
+    paladin_v7_layer2_cooldown_sec: float = 5.0
+    # After each completed pair: min wait before next Binance spike first leg when balanced (min 5s in from_env).
+    paladin_v7_pair_cooldown_sec: float = 5.0
     # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
     paladin_v7_max_shares_per_side: float = 16.0
@@ -477,10 +477,10 @@ class BotConfig:
                 1.50, max(1.0, _env_float("BOT_PALADIN_V7_FORCED_HEDGE_SUM_MAX", 1.30))
             ),
             paladin_v7_layer2_cooldown_sec=max(
-                0.0, min(300.0, _env_float("BOT_PALADIN_V7_LAYER2_COOLDOWN_SEC", 1.0))
+                5.0, min(300.0, _env_float("BOT_PALADIN_V7_LAYER2_COOLDOWN_SEC", 5.0))
             ),
             paladin_v7_pair_cooldown_sec=max(
-                1.0, min(300.0, _env_float("BOT_PALADIN_V7_PAIR_COOLDOWN_SEC", 1.0))
+                5.0, min(300.0, _env_float("BOT_PALADIN_V7_PAIR_COOLDOWN_SEC", 5.0))
             ),
             paladin_v7_base_order_shares=(
                 max(1.0, _env_float("BOT_PALADIN_V7_BASE_ORDER_SHARES", 5.0))

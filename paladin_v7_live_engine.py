@@ -122,6 +122,7 @@ class PaladinV7LiveEngine:
         self._last_flatten_ts: float = 0.0
         self._v7_window_reconcile_applies: int = 0
         self._v7_window_flatten_fills: int = 0
+        self._live_order_serial: int = 0
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -258,6 +259,7 @@ class PaladinV7LiveEngine:
                 min_notional=min_notional,
                 min_shares=min_shares,
             )
+        self._live_order_serial += 1
         try:
             res = self.trader.place_marketable_buy_with_result(
                 tok,
@@ -679,6 +681,7 @@ class PaladinV7LiveEngine:
             self._last_flatten_ts = 0.0
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
+            self._live_order_serial = 0
             self._v7_steps_fired = set()
             LOGGER.info("PALADIN v7 live: new window %s", slug)
             if self._ws is not None:
@@ -743,7 +746,10 @@ class PaladinV7LiveEngine:
         self._sec_btc_px[elapsed] = float(btc_point.price)
         self._sec_btc_vol[elapsed] += bv
 
+        order_serial_0 = self._live_order_serial
         self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
+        if self._live_order_serial != order_serial_0:
+            return
         pend = runner.pending_second
 
         cutoff = float(self.config.strategy_new_order_cutoff_seconds)

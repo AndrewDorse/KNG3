@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: start each window with the higher PM side immediately; no start delay.
-ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-flat-start-lead
+# Sync from kng_bot3: 5-second pacing, single-shot FAK POSTs, fixed 5-share clips for normal buys.
+ARG KNG3_IMAGE_TAG=2026-04-24-kng3-v7-fixed5-and-single-shot
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

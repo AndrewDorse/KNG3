@@ -169,7 +169,6 @@ class PolymarketTrader:
     # Order placement
     # ------------------------------------------------------------------
 
-    @_retry()
     def place_limit_buy(
         self,
         token: TokenMarket,
@@ -185,6 +184,9 @@ class PolymarketTrader:
             token: TokenMarket with .token_id
             price: limit price (0.01–0.99)
             size:  number of shares (integer)
+
+        Order submissions are intentionally not retried automatically. If the network drops
+        after POST, the exchange may still have accepted the order; retrying can double-fill.
         """
         order_kwargs: dict[str, Any] = {
             "token_id": token.token_id,
@@ -212,7 +214,6 @@ class PolymarketTrader:
                 token, price, size, fee_rate_bps=fee_rate_bps
             )
 
-    @_retry()
     def _place_marketable_buy_impl(
         self,
         token: TokenMarket,
@@ -242,7 +243,11 @@ class PolymarketTrader:
         confirm_get_order: bool = True,
         fee_rate_bps: int | None = None,
     ) -> Any:
-        """Submit FAK buy; parse POST body and optionally confirm fill via GET /order."""
+        """Submit one FAK buy; parse POST body and optionally confirm fill via GET /order.
+
+        This path is intentionally single-shot. Taker-order POST retries can create duplicate
+        fills when the first POST succeeds but the client loses the response.
+        """
         with self._taker_order_lock:
             return self._place_marketable_buy_with_result_impl(
                 token,
@@ -252,7 +257,6 @@ class PolymarketTrader:
                 fee_rate_bps=fee_rate_bps,
             )
 
-    @_retry()
     def _place_marketable_buy_with_result_impl(
         self,
         token: TokenMarket,
@@ -283,7 +287,6 @@ class PolymarketTrader:
             confirm=confirm_get_order,
         )
 
-    @_retry()
     def place_limit_sell(
         self, token: TokenMarket, price: float, size: int
     ) -> dict[str, Any]:
@@ -313,7 +316,6 @@ class PolymarketTrader:
         with self._taker_order_lock:
             return self._place_marketable_sell_impl(token, price, size)
 
-    @_retry()
     def _place_marketable_sell_impl(
         self, token: TokenMarket, price: float, size: float
     ) -> dict[str, Any]:
