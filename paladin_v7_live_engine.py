@@ -68,6 +68,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         layer2_dip_below_avg=float(cfg.paladin_v7_layer2_dip_below_avg),
         layer_level_offset_step=float(cfg.paladin_v7_layer_level_offset_step),
         layer2_low_vwap_dip_below_avg=float(cfg.paladin_v7_layer2_low_vwap_dip_below_avg),
+        no_new_layers_last_seconds=float(cfg.paladin_v7_no_new_layers_last_seconds),
         balance_share_tolerance=float(cfg.paladin_v7_balance_share_tolerance),
         imbalance_repair_max_pair_sum=float(cfg.paladin_v7_imbalance_repair_max_pair_sum),
         layer2_cooldown_sec=float(cfg.paladin_v7_layer2_cooldown_sec),
@@ -424,6 +425,7 @@ class PaladinV7LiveEngine:
         capped_reasons = {
             "v7_first_window_lead",
             "v7_first_binance_spike",
+            "v7_balanced_btc_spike",
             "v7_layer2_dip_lead",
             "v7_layer2_lowvwap_dip",
         }

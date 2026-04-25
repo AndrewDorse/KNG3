@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-PALADIN v7 (sim): immediate first leg, then balance-first layer logic on Polymarket.
+PALADIN v7 (sim): BTC-spike entries only, with the current balance-first hedge logic.
 
-1) **First leg**: when flat at a new window, buy 5 shares on the higher PM side immediately.
+1) **New risk** opens only on BTC volume spike + price jump. This applies when flat and also when an
+   existing book is already balanced. Side = BTC momentum direction, subject to ``first_leg_max_pm``,
+   base-order share sizing, and the normal pair cooldown when re-entering from a balanced book.
 2) **Second leg / rebalance**: every material imbalance uses one ``pending_second`` path. Cheap first hedge still
-   uses ``opened_avg + opposite_px + slip <= _nonforced_pair_cap()``. Cheap re-balance after later layers uses the
+   uses ``opened_avg + opposite_px + slip <= _nonforced_pair_cap()``. Cheap re-balance after later entries uses the
    avg of the *opposite VWAP side* plus the current price of the side being bought, plus slip. That means
    ``avg_higher_vwap + current_lower_vwap_px + slip`` when buying the lower-VWAP side, and
-   ``avg_lower_vwap + current_higher_vwap_px + slip`` when buying the higher-VWAP side. The cap tightens by 1c
-   per layer tier (0.94 at layer 2, 0.93 at layer 3, ...). Forced balance still fires after ``hedge_timeout_seconds``.
-3) **Extra layers**: only two triggers remain when the book is balanced: (a) higher-VWAP side at ``avg - 5c``
-   with the configured per-tier tightening step, and (b) lower-VWAP side at ``avg - 20c``. The checks are inclusive
-   (``<=``), and no BTC-spike add path remains.
+   ``avg_lower_vwap + current_higher_vwap_px + slip`` when buying the higher-VWAP side. Forced balance still fires
+   after ``hedge_timeout_seconds``.
+3) The old ``-5c`` / ``-20c`` layer-entry paths are disabled. New risk comes from BTC spikes only.
 
 Uses ``SimState`` / ``try_buy`` from the PALADIN window harness.
 """
@@ -69,14 +69,15 @@ class PaladinV7Params:
     # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
-    # Layer: higher-VWAP leg's mid must be < that leg's avg minus this (default 5¢).
+    # Legacy layer-entry threshold kept on params, but spike-only mode no longer uses it.
     layer2_dip_below_avg: float = 0.05
-    # After each completed layer tier (5-5 -> 10-10 -> 15-15 ...), make the higher-VWAP dip gate
-    # and the balanced cheap-hedge price 1c stricter per tier step when nonzero.
+    # Legacy layer tightening knob kept on params; spike-only mode no longer uses it for entries.
     layer_level_offset_step: float = 0.01
-    # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
+    # Legacy lower-VWAP deep-dip threshold kept on params, but spike-only mode no longer uses it.
     layer2_low_vwap_dip_below_avg: float = 0.20
-    # Treat |up−down| <= this (shares) as balanced for layer checks (default 1.0).
+    # Legacy layer cutoff kept on params; spike-only mode has no non-spike layer-entry path.
+    no_new_layers_last_seconds: float = 60.0
+    # Treat |up−down| <= this (shares) as balanced for spike re-entry checks (default 1.0).
     balance_share_tolerance: float = 1.0
     # Imbalance: buy lighter side when pm_light + VWAP(heavy) < this (0.97 = 97¢ pair proxy vs heavy leg).
     imbalance_repair_max_pair_sum: float = 0.97
@@ -291,7 +292,6 @@ def paladin_v7_step(
     balance_order_gap_trigger = max(0.0, min_sh - 1.0)
     layer_level = _current_layer_level(st, base_sz)
     layer_offset_step = max(0.0, float(p.layer_level_offset_step))
-    dynamic_layer_dip = max(0.0, float(p.layer2_dip_below_avg) + layer_level * layer_offset_step)
     dynamic_balance_dip = max(0.0, 0.05 + layer_level * layer_offset_step)
     # Universal balance engine: if the live book is materially imbalanced, the next action must be
     # on the lighter side. Use one pending path for first hedge and later re-balancing.
@@ -392,87 +392,48 @@ def paladin_v7_step(
     flat = su <= 1e-9 and sd <= 1e-9
     both = min(su, sd) + 1e-9 >= min_sz_gate
 
-    # --- Start-of-window first leg: when flat, buy the higher PM side immediately ---
-    if flat:
-        lead = _lead_side(pm_u, pm_d)
-        px_0 = pm_u if lead == "up" else pm_d
-        sh0 = _entry_shares(
-            st,
-            lead,
-            base_sz,
-            px=px_0,
-            cap=p.max_shares_per_side,
-            min_sh=min_sh,
-            min_notional=p.min_notional,
-        )
-        if sh0 >= min_sh - 1e-9:
-            matched0 = buy(
-                st,
-                t=t,
-                side=lead,
-                shares=sh0,
-                px=px_0,
-                reason="v7_first_window_lead",
-                budget=p.budget_usdc,
-                min_notional=p.min_notional,
-                min_shares=min_sh,
-            )
-            if matched0 > 1e-9:
-                other0: Side = "down" if lead == "up" else "up"
-                leg_avg0 = float(st.avg_up) if lead == "up" else float(st.avg_down)
-                runner.pending_second = (other0, float(matched0), leg_avg0, int(t))
+    # --- Spike-only new risk: flat start or balanced re-entry ---
+    can_open = flat or (balanced and both)
+    if not can_open:
         return
-
-    # --- Extra layers: higher-VWAP dip, then lower-VWAP deep dip (one fill -> return) ---
-    l2_cd = max(5.0, float(p.layer2_cooldown_sec))
-
-    def _try_layer_dip(side: Side, dip_below_avg: float, reason: str) -> bool:
-        px_s = pm_u if side == "up" else pm_d
-        avg_s = float(st.avg_up) if side == "up" else float(st.avg_down)
-        sz_s = float(st.size_up) if side == "up" else float(st.size_down)
-        dip_m = max(0.0, float(dip_below_avg))
-        other_s: Side = "down" if side == "up" else "up"
-        sh_add = _entry_shares(
-            st,
-            side,
-            base_sz,
-            px=px_s,
-            cap=p.max_shares_per_side,
-            min_sh=min_sh,
-            min_notional=p.min_notional,
-        )
-        if (
-            sz_s + 1e-9 < min_sz_gate
-            or not (px_s <= avg_s - dip_m + 1e-9)
-            or sh_add + 1e-9 < min_sh - 1e-9
-        ):
-            return False
-        filled = buy(
-            st,
-            t=t,
-            side=side,
-            shares=sh_add,
-            px=px_s,
-            reason=reason,
-            budget=p.budget_usdc,
-            min_notional=p.min_notional,
-            min_shares=min_sh,
-        )
-        if filled > 1e-9:
-            leg_avg = float(st.avg_up) if side == "up" else float(st.avg_down)
-            runner.pending_second = (other_s, float(filled), leg_avg, int(t))
-            return True
-        return False
-
-    if balanced and both and (float(t) - float(runner.last_completed_pair_elapsed)) >= l2_cd:
-        hi = _higher_vwap_side(st, pm_u, pm_d)
-        if _try_layer_dip(hi, dynamic_layer_dip, "v7_layer2_dip_lead"):
-            return
-        lo = _lower_vwap_side(st, pm_u, pm_d)
-        if _try_layer_dip(lo, float(p.layer2_low_vwap_dip_below_avg), "v7_layer2_lowvwap_dip"):
-            return
-        # No other add trigger is allowed now. Only -5c / -20c layer entries remain.
-    return
+    pair_cd = max(5.0, float(p.pair_cooldown_sec))
+    if float(t) - float(runner.last_completed_pair_elapsed) < pair_cd and not flat:
+        return
+    if not (_volume_spike(ticks, t, p) and _price_jump(ticks, t, p)):
+        return
+    mom = _btc_momentum_side(ticks, t)
+    if mom is None:
+        return
+    px_1 = pm_u if mom == "up" else pm_d
+    if px_1 + 1e-9 > float(p.first_leg_max_pm):
+        return
+    sh1 = _entry_shares(
+        st,
+        mom,
+        base_sz,
+        px=px_1,
+        cap=p.max_shares_per_side,
+        min_sh=min_sh,
+        min_notional=p.min_notional,
+    )
+    if sh1 < min_sh - 1e-9:
+        return
+    reason = "v7_balanced_btc_spike" if not flat else "v7_first_binance_spike"
+    matched = buy(
+        st,
+        t=t,
+        side=mom,
+        shares=sh1,
+        px=px_1,
+        reason=reason,
+        budget=p.budget_usdc,
+        min_notional=p.min_notional,
+        min_shares=min_sh,
+    )
+    if matched > 1e-9:
+        other: Side = "down" if mom == "up" else "up"
+        leg_avg = float(st.avg_up) if mom == "up" else float(st.avg_down)
+        runner.pending_second = (other, float(matched), leg_avg, int(t))
 
 
 # Tight sim: $10 budget, 10 shares/side cap, 5-share base orders (batch preset label kept for scripts).

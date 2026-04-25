@@ -228,20 +228,22 @@ class BotConfig:
     paladin_v7_cheap_hedge_min_delay_sec: float = 0.0
     paladin_v7_hedge_timeout_seconds: float = 60.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
-    # After each completed pair: min wait before next layer‑2 add (replay seconds; min 5 in strategy).
+    # Legacy layer-entry cooldown kept on config; spike-only mode no longer uses a non-spike layer path.
     paladin_v7_layer2_cooldown_sec: float = 5.0
-    # After each completed pair: min wait before next Binance spike first leg when balanced (min 5s in from_env).
+    # After each completed pair: min wait before the next BTC-spike entry when the book is balanced.
     paladin_v7_pair_cooldown_sec: float = 5.0
     # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
     paladin_v7_max_shares_per_side: float = 20.0
-    # Layer 2: higher-VWAP leg's mid must be < that leg's avg minus this (tie: higher PM mid picks leg).
+    # Legacy higher-VWAP dip threshold kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer2_dip_below_avg: float = 0.05
-    # Tighten the higher-VWAP layer gate and balanced cheap-hedge price by this amount per tier.
+    # Legacy layer tightening knob kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer_level_offset_step: float = 0.01
-    # Layer: lower-VWAP leg's mid must be < that leg's avg minus this (default 20¢).
+    # Legacy lower-VWAP deep-dip threshold kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer2_low_vwap_dip_below_avg: float = 0.20
-    # |up−down| <= this (shares) counts as balanced for extra layers + spike-from-balanced (default 1.0).
+    # Legacy layer cutoff kept on config; spike-only mode no longer uses a non-spike layer path.
+    paladin_v7_no_new_layers_last_seconds: float = 60.0
+    # |up−down| <= this (shares) counts as balanced for spike re-entry checks (default 1.0).
     paladin_v7_balance_share_tolerance: float = 1.0
     # Imbalance repair: buy lighter side when pm_light + VWAP(heavy) < this (default 0.97).
     paladin_v7_imbalance_repair_max_pair_sum: float = 0.97
@@ -499,6 +501,9 @@ class BotConfig:
             ),
             paladin_v7_layer2_low_vwap_dip_below_avg=max(
                 0.0, min(0.95, _env_float("BOT_PALADIN_V7_LAYER2_LOW_VWAP_DIP_BELOW_AVG", 0.20))
+            ),
+            paladin_v7_no_new_layers_last_seconds=max(
+                0.0, min(300.0, _env_float("BOT_PALADIN_V7_NO_NEW_LAYERS_LAST_SEC", 60.0))
             ),
             paladin_v7_balance_share_tolerance=max(
                 0.0, min(50.0, _env_float("BOT_PALADIN_V7_BALANCE_SHARE_TOLERANCE", 1.0))
