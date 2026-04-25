@@ -5,7 +5,8 @@ PALADIN v7 (sim): BTC-spike entries only, with the current balance-first hedge l
 1) **New risk** opens only on BTC volume spike + price jump. This applies when flat and also when an
    existing book is already balanced. Side = BTC momentum direction, subject to ``first_leg_max_pm``,
    base-order share sizing, and the normal pair cooldown when re-entering from a balanced book.
-   Balanced re-entry clips are additionally ignored unless the buy price is inside the 15c..85c band.
+   Balanced re-entry clips are additionally ignored unless the buy price is inside the configured
+   20c..80c band.
 2) **Second leg / rebalance**: every material imbalance uses one ``pending_second`` path. Cheap first hedge still
    uses ``opened_avg + opposite_px + slip <= _nonforced_pair_cap()``. Cheap re-balance after later entries uses the
    avg of the *opposite VWAP side* plus the current price of the side being bought, plus slip. That means
@@ -46,7 +47,7 @@ class PaladinV7Params:
     budget_usdc: float = 400.0
     # First leg, layer-2 dip add, and hedge clip size (see BOT_PALADIN_V7_BASE_ORDER_SHARES).
     base_order_shares: float = 5.0
-    max_shares_per_side: float = 20.0
+    max_shares_per_side: float = 25.0
     min_notional: float = 1.0
     min_shares: float = 5.0
 
@@ -56,6 +57,8 @@ class PaladinV7Params:
     btc_abs_move_min_usd: float = 2.0
 
     first_leg_max_pm: float = 0.62
+    balanced_entry_min_pm: float = 0.20
+    balanced_entry_max_pm: float = 0.80
     cheap_other_margin: float = 0.04
     cheap_pair_sum_max: float = 0.99
     # Ceiling for *our* economics: cheap hedge (held VWAP + opposite + slip). Spike first leg uses first_leg_max_pm only.
@@ -72,6 +75,8 @@ class PaladinV7Params:
 
     # Legacy layer-entry threshold kept on params, but spike-only mode no longer uses it.
     layer2_dip_below_avg: float = 0.05
+    # Hedge-price cap starts at 1 - this deduction, then tightens by layer_level_offset_step per layer.
+    cheap_balance_start_deduction: float = 0.08
     # Legacy layer tightening knob kept on params; spike-only mode no longer uses it for entries.
     layer_level_offset_step: float = 0.01
     # Legacy lower-VWAP deep-dip threshold kept on params, but spike-only mode no longer uses it.
@@ -293,7 +298,7 @@ def paladin_v7_step(
     balance_order_gap_trigger = max(0.0, min_sh - 1.0)
     layer_level = _current_layer_level(st, base_sz)
     layer_offset_step = max(0.0, float(p.layer_level_offset_step))
-    dynamic_balance_dip = max(0.0, 0.05 + layer_level * layer_offset_step)
+    dynamic_balance_dip = max(0.0, float(p.cheap_balance_start_deduction) + layer_level * layer_offset_step)
     # Universal balance engine: if the live book is materially imbalanced, the next action must be
     # on the lighter side. Use one pending path for first hedge and later re-balancing.
     if runner.pending_second is None and (not flat_now) and gap_now > balance_order_gap_trigger + 1e-9:
@@ -332,37 +337,37 @@ def paladin_v7_step(
         #   and this must fit under 1.00 - dynamic_balance_dip (0.94 at layer 2, 0.93 at layer 3, ...).
         min_cheap_age = max(0.0, float(p.cheap_hedge_min_delay_sec))
         ok_cheap = False
+        cheap_limit_px = 0.0
         if both_nonflat:
             slip = max(0.0, float(p.cheap_hedge_slip_buffer))
             hi_vwap = "up" if float(st.avg_up) >= float(st.avg_down) else "down"
             lo_vwap = "down" if hi_vwap == "up" else "up"
             opp_vwap = lo_vwap if side_o == hi_vwap else hi_vwap
             avg_opp_vwap = float(st.avg_up) if opp_vwap == "up" else float(st.avg_down)
-            pair_held_quote_sum = float(avg_opp_vwap) + float(px_o) + slip
             cap = max(0.01, 1.0 - dynamic_balance_dip)
-            ok_cheap = (age + 1e-9 >= min_cheap_age) and (pair_held_quote_sum <= cap + 1e-9)
+            cheap_limit_px = max(0.01, min(0.99, cap - float(avg_opp_vwap) - slip))
+            ok_cheap = age + 1e-9 >= min_cheap_age
         else:
             slip = max(0.0, float(p.cheap_hedge_slip_buffer))
-            pair_held_quote_sum = float(avg_first) + float(px_o) + slip
             cap = _nonforced_pair_cap(p)
-            ok_cheap = (age + 1e-9 >= min_cheap_age) and (pair_held_quote_sum <= cap + 1e-9)
+            cheap_limit_px = max(0.01, min(0.99, cap - float(avg_first) - slip))
+            ok_cheap = age + 1e-9 >= min_cheap_age
 
         # Forced must run on timeout even when pm_u+pm_d > forced_hedge_max_book_sum (wide/late-window mids);
         # otherwise cheap can fail forever and inventory stays one-sided.
         ok_forced = forced
 
         if ok_cheap or ok_forced:
-            # Balance with one order at a time, but when the imbalance is >= 5 shares, target the full gap.
-            hedge_target = max(float(cur_gap), min_sh)
+            # Hedge/balance always clips one fixed order at a time; do not fire full-gap repair orders.
+            hedge_target = min_sh
             hedge_min_sh = min_sh
             balance_cap = max(float(p.max_shares_per_side), su, sd)
             sh_exec = _clamp_shares(st, side_o, hedge_target, balance_cap, hedge_min_sh)
             if sh_exec >= hedge_min_sh - 1e-9:
-                # If mid*shares < CLOB min notional (e.g. $1), still complete the hedge in sim.
                 hedge_mn = float(p.min_notional)
-                px_exec = px_o
+                px_exec = float(cheap_limit_px) if ok_cheap and not ok_forced else px_o
                 if sh_exec * px_exec + 1e-9 < hedge_mn:
-                    hedge_mn = 0.0
+                    return
                 reason = "v7_hedge_forced" if ok_forced and not ok_cheap else "v7_hedge_cheap"
                 filled = buy(
                     st,
@@ -406,7 +411,10 @@ def paladin_v7_step(
     if mom is None:
         return
     px_1 = pm_u if mom == "up" else pm_d
-    if (not flat) and (px_1 < 0.15 - 1e-9 or px_1 > 0.85 + 1e-9):
+    if (not flat) and (
+        px_1 < float(p.balanced_entry_min_pm) - 1e-9
+        or px_1 > float(p.balanced_entry_max_pm) + 1e-9
+    ):
         return
     if px_1 + 1e-9 > float(p.first_leg_max_pm):
         return

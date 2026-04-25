@@ -218,6 +218,9 @@ class BotConfig:
     paladin_v7_volume_floor: float = 1e-6
     paladin_v7_btc_abs_move_min_usd: float = 2.0
     paladin_v7_first_leg_max_pm: float = 0.62
+    # Balanced re-entry spike buys are ignored outside this PM band.
+    paladin_v7_balanced_entry_min_pm: float = 0.20
+    paladin_v7_balanced_entry_max_pm: float = 0.80
     # Extra price buffer for marketable BTC-spike entries so they cross reliably when the book moves fast.
     paladin_v7_spike_market_price_buffer: float = 0.02
     paladin_v7_cheap_other_margin: float = 0.04
@@ -236,9 +239,11 @@ class BotConfig:
     paladin_v7_pair_cooldown_sec: float = 5.0
     # First leg, layer-2 dip add, and hedge clip (BOT_PALADIN_V7_BASE_ORDER_SHARES; legacy BOT_PALADIN_V7_CLIP_SHARES).
     paladin_v7_base_order_shares: float = 5.0
-    paladin_v7_max_shares_per_side: float = 20.0
+    paladin_v7_max_shares_per_side: float = 25.0
     # Legacy higher-VWAP dip threshold kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer2_dip_below_avg: float = 0.05
+    # Hedge-price cap starts at 1 - this deduction, then tightens by layer_level_offset_step per layer.
+    paladin_v7_cheap_balance_start_deduction: float = 0.08
     # Legacy layer tightening knob kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer_level_offset_step: float = 0.01
     # Legacy lower-VWAP deep-dip threshold kept on config; spike-only mode no longer uses it for entries.
@@ -471,6 +476,12 @@ class BotConfig:
             paladin_v7_volume_floor=max(0.0, _env_float("BOT_PALADIN_V7_VOL_FLOOR", 1e-6)),
             paladin_v7_btc_abs_move_min_usd=max(0.0, _env_float("BOT_PALADIN_V7_BTC_MOVE_MIN_USD", 2.0)),
             paladin_v7_first_leg_max_pm=min(0.99, max(0.01, _env_float("BOT_PALADIN_V7_FIRST_LEG_MAX_PM", 0.62))),
+            paladin_v7_balanced_entry_min_pm=min(
+                0.99, max(0.01, _env_float("BOT_PALADIN_V7_BALANCED_ENTRY_MIN_PM", 0.20))
+            ),
+            paladin_v7_balanced_entry_max_pm=min(
+                0.99, max(0.01, _env_float("BOT_PALADIN_V7_BALANCED_ENTRY_MAX_PM", 0.80))
+            ),
             paladin_v7_spike_market_price_buffer=max(
                 0.0, min(0.05, _env_float("BOT_PALADIN_V7_SPIKE_MARKET_PRICE_BUFFER", 0.02))
             ),
@@ -501,9 +512,12 @@ class BotConfig:
                 if (os.getenv("BOT_PALADIN_V7_BASE_ORDER_SHARES") or "").strip()
                 else max(1.0, _env_float("BOT_PALADIN_V7_CLIP_SHARES", 5.0))
             ),
-            paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 20.0)),
+            paladin_v7_max_shares_per_side=max(1.0, _env_float("BOT_PALADIN_V7_MAX_SHARES_PER_SIDE", 25.0)),
             paladin_v7_layer2_dip_below_avg=max(
                 0.0, min(0.5, _env_float("BOT_PALADIN_V7_LAYER2_DIP_BELOW_AVG", 0.05))
+            ),
+            paladin_v7_cheap_balance_start_deduction=max(
+                0.0, min(0.5, _env_float("BOT_PALADIN_V7_CHEAP_BALANCE_START_DEDUCTION", 0.08))
             ),
             paladin_v7_layer_level_offset_step=max(
                 0.0, min(0.1, _env_float("BOT_PALADIN_V7_LAYER_LEVEL_OFFSET_STEP", 0.01))

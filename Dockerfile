@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: blocks duplicate buys harder, trusts stable API imbalance reality, and ignores balanced re-entry buys outside 15c..85c.
-ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v8-order-safety-api-reality
+# Sync from kng_bot3: hard-clamps live clips, posts resting hedges immediately after imbalance, uses 20c..80c balanced re-entry band, and starts hedge deduction at 8c.
+ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v8-fixed-clip-resting-hedge
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 

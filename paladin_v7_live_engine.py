@@ -58,6 +58,8 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         volume_floor=float(cfg.paladin_v7_volume_floor),
         btc_abs_move_min_usd=float(cfg.paladin_v7_btc_abs_move_min_usd),
         first_leg_max_pm=float(cfg.paladin_v7_first_leg_max_pm),
+        balanced_entry_min_pm=float(cfg.paladin_v7_balanced_entry_min_pm),
+        balanced_entry_max_pm=float(cfg.paladin_v7_balanced_entry_max_pm),
         # Live-only execution buffer is handled below in try_buy_fn; sim path keeps pure strategy prices.
         cheap_other_margin=float(cfg.paladin_v7_cheap_other_margin),
         cheap_pair_sum_max=float(cfg.paladin_v7_cheap_pair_sum_max),
@@ -67,6 +69,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         hedge_timeout_seconds=float(cfg.paladin_v7_hedge_timeout_seconds),
         forced_hedge_max_book_sum=float(cfg.paladin_v7_forced_hedge_max_book_sum),
         layer2_dip_below_avg=float(cfg.paladin_v7_layer2_dip_below_avg),
+        cheap_balance_start_deduction=float(cfg.paladin_v7_cheap_balance_start_deduction),
         layer_level_offset_step=float(cfg.paladin_v7_layer_level_offset_step),
         layer2_low_vwap_dip_below_avg=float(cfg.paladin_v7_layer2_low_vwap_dip_below_avg),
         no_new_layers_last_seconds=float(cfg.paladin_v7_no_new_layers_last_seconds),
@@ -412,6 +415,38 @@ class PaladinV7LiveEngine:
         self._api_reality_last_d = -1.0
         self._api_reality_next_check_ts = 0.0
 
+    def _clip_cap_for_reason(self, reason: str) -> int:
+        fixed_clip_reasons = {
+            "v7_first_window_lead",
+            "v7_first_binance_spike",
+            "v7_balanced_btc_spike",
+            "v7_layer2_dip_lead",
+            "v7_layer2_lowvwap_dip",
+            "v7_hedge_cheap",
+            "v7_hedge_forced",
+            "v7_api_imbalance_flatten",
+        }
+        base_clip = max(1, int(round(float(self.config.paladin_v7_base_order_shares))))
+        return base_clip if str(reason) in fixed_clip_reasons else 10**9
+
+    def _cap_requested_live_size(self, shares: float, reason: str) -> int:
+        raw_size = max(0, int(round(float(shares))))
+        return min(raw_size, self._clip_cap_for_reason(reason))
+
+    def _cap_confirmed_fill(self, filled: float, req_shares: float, reason: str, order_id: str) -> float:
+        req = max(0.0, float(req_shares))
+        got = max(0.0, float(filled))
+        if got <= req + 1e-6:
+            return got
+        LOGGER.warning(
+            "PALADIN v7 capping suspicious fill %.4f -> %.4f | %s | oid=%s",
+            got,
+            req,
+            reason,
+            order_id[:24] + "…" if order_id else "?",
+        )
+        return req
+
     @staticmethod
     def _order_token_id(order: dict[str, Any]) -> str:
         for key in ("asset_id", "assetId", "token_id", "tokenId", "market_id", "marketId"):
@@ -529,6 +564,7 @@ class PaladinV7LiveEngine:
         order_id = str(self._active_limit_order_id or "")
         side = str(self._active_limit_order_side or "")
         reason = str(self._active_limit_order_reason or "")
+        req_shares = float(self._active_limit_order_req_shares or 0.0)
         limit_px = float(self._active_limit_order_limit_px or 0.0)
         api_before = float(self._active_limit_order_api_before or 0.0)
         tok = contract.up if side == "up" else contract.down
@@ -542,6 +578,7 @@ class PaladinV7LiveEngine:
             delta_api = max(0.0, api_after - api_before)
             if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
                 filled = delta_api
+        filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
         if filled > 1e-9:
             avg_px = self._confirm_live_buy_avg_price(
                 order_id,
@@ -716,17 +753,7 @@ class PaladinV7LiveEngine:
             return 0.0
         self._reset_api_reality_probe()
         exchange_min_shares = int(math.ceil(float(self.config.paladin_v7_min_shares)))
-        raw_size = int(round(float(shares)))
-        capped_reasons = {
-            "v7_first_window_lead",
-            "v7_first_binance_spike",
-            "v7_balanced_btc_spike",
-            "v7_layer2_dip_lead",
-            "v7_layer2_lowvwap_dip",
-        }
-        if str(reason) in capped_reasons:
-            raw_size = min(raw_size, int(round(float(self.config.paladin_v7_base_order_shares))))
-        size = raw_size
+        size = self._cap_requested_live_size(shares, reason)
         if size <= 0 or size < max(exchange_min_shares, int(math.ceil(min_shares))):
             return 0.0
         req_shares = float(size)
@@ -796,6 +823,7 @@ class PaladinV7LiveEngine:
                 delta_api = max(0.0, api_after - api_before)
                 if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
                     filled = delta_api
+            filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
             if filled <= 1e-9:
                 return 0.0
             avg_px = px
@@ -918,6 +946,7 @@ class PaladinV7LiveEngine:
                 filled = delta_api
                 avg_px = px
                 spent = filled * avg_px
+        filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
         if filled <= 1e-9:
             return 0.0
         avg_px = self._confirm_live_buy_avg_price(
