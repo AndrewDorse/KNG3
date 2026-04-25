@@ -46,7 +46,7 @@ def main() -> int:
     )
     LOGGER.info("poly_ws      = %s (%s)", config.polymarket_ws_enabled, config.polymarket_ws_url)
     LOGGER.info(
-        "BOT_PALADIN_V7_* kernel tunables (v7 AND v9) = budget=$%.2f base_order=%.1f max/side=%.0f layer2_hi_dip=%.3f layer2_lo_dip=%.3f bal_tol=%.2fsh "
+        "shared paladin_v7_step kernel tunables (Polymarket env still named BOT_PALADIN_V7_*) = budget=$%.2f base_order=%.1f max/side=%.0f layer2_hi_dip=%.3f layer2_lo_dip=%.3f bal_tol=%.2fsh "
         "layer2_cd=%.1fs imb_repair<%.3f pair_cd=%.0fs vol_ratio=%.2f lookback=%ds btc_move>=%.2f",
         float(config.strategy_budget_cap_usdc),
         float(config.paladin_v7_base_order_shares),

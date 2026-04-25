@@ -42,12 +42,18 @@ unless v9-specific orchestration is added later.
 
 from __future__ import annotations
 
-from config import LOGGER
+from config import LOGGER, BotConfig
+from market_locator import GammaMarketLocator
 from paladin_v7_live_engine import PaladinV7LiveEngine
+from trader import PolymarketTrader
 
 
 class PaladinV9LiveEngine(PaladinV7LiveEngine):
     """Same behavior as ``PaladinV7LiveEngine``; branding and log prefix for PALADIN v9."""
+
+    def __init__(self, config: BotConfig, locator: GammaMarketLocator, trader: PolymarketTrader) -> None:
+        super().__init__(config, locator, trader)
+        self._paladin_live_log_prefix = "PALADIN v9"
 
     def run(self) -> None:
         LOGGER.info("=" * 60)
