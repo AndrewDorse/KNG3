@@ -380,6 +380,8 @@ def paladin_v7_step(
                     budget=p.budget_usdc,
                     min_notional=hedge_mn,
                     min_shares=hedge_min_sh,
+                    pm_u=pm_u,
+                    pm_d=pm_d,
                 )
                 if filled > 1e-9:
                     # Live FAK can partially fill; do not clear pending until hedge need is exhausted
@@ -441,6 +443,8 @@ def paladin_v7_step(
         budget=p.budget_usdc,
         min_notional=p.min_notional,
         min_shares=min_sh,
+        pm_u=pm_u,
+        pm_d=pm_d,
     )
     if matched > 1e-9:
         other: Side = "down" if mom == "up" else "up"

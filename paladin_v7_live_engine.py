@@ -785,6 +785,8 @@ class PaladinV7LiveEngine:
         min_shares: float,
         persistent_limit_until_ts: float | None = None,
         persistent_cancel_at_elapsed: int | None = None,
+        tape_pm_u: float | None = None,
+        tape_pm_d: float | None = None,
     ) -> float:
         px = float(px)
         px = round(px, 4)
@@ -835,6 +837,8 @@ class PaladinV7LiveEngine:
                 budget=budget,
                 min_notional=min_notional,
                 min_shares=min_shares,
+                pm_u=tape_pm_u,
+                pm_d=tape_pm_d,
             )
         api_before = 0.0
         try:
@@ -1369,6 +1373,8 @@ class PaladinV7LiveEngine:
             budget=budget,
             min_notional=float(self.config.paladin_v7_min_notional),
             min_shares=float(self.config.paladin_v7_min_shares),
+            tape_pm_u=pm_u,
+            tape_pm_d=pm_d,
         )
         if filled > 1e-9:
             self._last_flatten_ts = now
@@ -1612,6 +1618,8 @@ class PaladinV7LiveEngine:
             budget: float,
             min_notional: float,
             min_shares: float,
+            pm_u: float | None = None,
+            pm_d: float | None = None,
         ) -> float:
             px_eff = float(px)
             persistent_limit_until_ts: float | None = None
@@ -1662,6 +1670,8 @@ class PaladinV7LiveEngine:
                 min_shares=min_shares,
                 persistent_limit_until_ts=persistent_limit_until_ts,
                 persistent_cancel_at_elapsed=persistent_cancel_at_elapsed,
+                tape_pm_u=float(pm_u),
+                tape_pm_d=float(pm_d),
             )
 
         # Exactly one strategy step per market second (see module docstring).
