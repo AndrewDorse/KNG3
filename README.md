@@ -1,6 +1,6 @@
-# KNG3 — PALADIN v7 / v9 (Docker only)
+# KNG3 — PALADIN **v9** (Docker default)
 
-Minimal mirror to run **PALADIN v9** (default) or **PALADIN v7** live on Polymarket BTC 15m markets. Both modes use the same rule kernel (`paladin_v7_step`) and the same `BOT_PALADIN_V7_*` environment variables; v9 is the product entry (`PaladinV9LiveEngine`) and matches the v9 second-sim backtest naming.
+Minimal mirror to run **PALADIN v9** live on Polymarket BTC 15m markets. **`BOT_STRATEGY_MODE` defaults to `paladin_v9`** if unset (`config.py` + `.env.example`). Optional **`paladin_v7`** uses the same rule kernel (`paladin_v7_step`) and the same `BOT_PALADIN_V7_*` tunables; v9 is the product entry (`PaladinV9LiveEngine`) and matches the v9 second-sim backtest naming.
 
 - Copy `.env.example` to `.env` and set keys / `POLY_DRY_RUN`. Default **`BOT_STRATEGY_MODE=paladin_v9`** uses a **$400** per-window budget cap unless you set **`BOT_STRATEGY_BUDGET_CAP_USDC`** (v7 default cap in code is **$10** when mode is v7 and the cap env is unset).
 - `docker compose build --no-cache` then `docker compose up -d` after each pull (see **`Dockerfile`** `KNG3_IMAGE_TAG` bump).
@@ -24,8 +24,8 @@ Full strategy development stays in **kng_bot3**; this repo only ships what the `
 From this repo root (no Docker required for the first two):
 
 ```powershell
-python -m py_compile main.py config.py trader.py market_locator.py btc_price_feed.py http_session.py clob_fak.py polymarket_ws.py paladin_v7_live_engine.py btc15_redeem_engine.py paladin_live_engine.py signal_analyzer.py PALADIN\paladin_engine.py PALADIN\paladin_v7.py PALADIN\simulate_paladin_window.py
-python -c "import paladin_v7_live_engine; import btc15_redeem_engine; import config; print('imports_ok')"
+python -m py_compile main.py config.py trader.py market_locator.py btc_price_feed.py http_session.py clob_fak.py polymarket_ws.py paladin_v7_live_engine.py paladin_v9_live_engine.py btc15_redeem_engine.py paladin_live_engine.py signal_analyzer.py PALADIN\paladin_engine.py PALADIN\paladin_v7.py PALADIN\simulate_paladin_window.py
+python -c "import paladin_v7_live_engine; import paladin_v9_live_engine; import btc15_redeem_engine; import config; print('imports_ok')"
 ```
 
 Then with Docker installed (`docker compose` reads **`.env`** — create it from `.env.example` first):

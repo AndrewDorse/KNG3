@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-# Bump when syncing Paladin v7/v9 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: spike-only v7 kernel, v9 live entry; 5/25 clip+cap, 30s hedge timeout + forced-over-cheap,
-# resting cheap hedge, FAK fill clamp, post-buy/reconcile add caps; config validates budget >= min for v7/v9.
-ARG KNG3_IMAGE_TAG=2026-04-25-default-strategy-paladin-v9
-LABEL org.opencontainers.image.title="KNG3 Paladin v7/v9" \
+# Bump when syncing from kng_bot3 (labels only; COPY list below is the real contract).
+# Default live strategy: PALADIN v9 (BOT_STRATEGY_MODE unset -> paladin_v9; kernel still paladin_v7_step).
+ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v9-default-explicit
+LABEL org.opencontainers.image.title="KNG3 PALADIN v9 (default)" \
+      org.opencontainers.image.description="Docker image: paladin_v9 live unless BOT_STRATEGY_MODE=paladin_v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
