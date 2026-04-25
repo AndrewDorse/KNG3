@@ -10,6 +10,8 @@ are not fired twice in the same second (duplicate FAKs). A **set** of fired ``el
 ``pending_second`` is re-read **after** reconcile so cutoff/entry-delay gates match post-sync state.
 When rebuilding pending from inventory, **preserve** the prior hedge ``t0`` for the same hedge side so
 ``hedge_timeout_seconds`` is not reset every reconcile (that stranded cheap-failing hedges).
+Resting ``v7_hedge_cheap`` GTC orders use a **window-second** cancel deadline aligned with ``paladin_v7_step``
+(forced hedge age); the poll loop must **not** skip ``paladin_v7_step`` while that order is merely open.
 Live buy POSTs stay serialized in ``PolymarketTrader`` via a lock.
 """
 
@@ -145,6 +147,8 @@ class PaladinV7LiveEngine:
         self._active_limit_order_api_before: float = 0.0
         self._active_limit_order_force_cancel_ts: float = 0.0
         self._active_limit_order_persistent: bool = False
+        # Window-second (elapsed) deadline for resting cheap hedge; wall clock alone desyncs from paladin_v7_step.
+        self._active_limit_order_cancel_at_elapsed: int | None = None
         self._last_untracked_open_order_log_ts: float = 0.0
         self._api_reality_mismatch_count: int = 0
         self._api_reality_last_u: float = -1.0
@@ -397,6 +401,7 @@ class PaladinV7LiveEngine:
         self._active_limit_order_api_before = 0.0
         self._active_limit_order_force_cancel_ts = 0.0
         self._active_limit_order_persistent = False
+        self._active_limit_order_cancel_at_elapsed = None
 
     def _clear_active_limit_order(self) -> None:
         self._active_limit_order_id = ""
@@ -410,6 +415,7 @@ class PaladinV7LiveEngine:
         self._active_limit_order_api_before = 0.0
         self._active_limit_order_force_cancel_ts = 0.0
         self._active_limit_order_persistent = False
+        self._active_limit_order_cancel_at_elapsed = None
         self._limit_order_busy_until_ts = 0.0
         self._limit_order_busy_reason = ""
 
@@ -625,13 +631,18 @@ class PaladinV7LiveEngine:
         t: int,
         now: float,
     ) -> bool:
+        """Poll resting GTC state. Returns True only when a fill was applied this poll (caller may skip rest).
+
+        **Important:** returns False while the order is merely open/waiting so ``paladin_v7_step`` still runs
+        each window second (forced hedge uses ``elapsed`` age, not wall time).
+        """
         order_id = str(self._active_limit_order_id or "")
         if not order_id:
             return False
         if not self._active_limit_order_persistent:
             return self._has_unresolved_active_limit_order(now, self._active_limit_order_limit_px)
         if now - self._active_limit_order_last_check_ts < 0.4:
-            return True
+            return False
         self._active_limit_order_last_check_ts = now
         limit_px = float(self._active_limit_order_limit_px or 0.5)
         order_state: dict[str, Any] | None = None
@@ -650,40 +661,61 @@ class PaladinV7LiveEngine:
                 self._finalize_active_limit_fill(contract, st, t=t, order_state=order_state)
                 return True
             if self._order_status_is_open(status):
-                if (
+                cancel_at_el = self._active_limit_order_cancel_at_elapsed
+                is_cheap = str(self._active_limit_order_reason) == "v7_hedge_cheap"
+                hedge_deadline_hit = bool(is_cheap and cancel_at_el is not None and t >= int(cancel_at_el))
+                wall_deadline_hit = bool(
                     self._active_limit_order_force_cancel_ts > 0.0
                     and now >= self._active_limit_order_force_cancel_ts - 1e-9
-                    and not self._active_limit_order_cancel_requested
-                ):
+                    and (not is_cheap or cancel_at_el is None)
+                )
+                if (hedge_deadline_hit or wall_deadline_hit) and not self._active_limit_order_cancel_requested:
                     self._active_limit_order_cancel_requested = True
                     cancelled = self.trader.cancel_order(order_id)
                     LOGGER.info(
-                        "PALADIN v7 persistent hedge timeout cancel oid=%s cancelled=%s | %s",
+                        "PALADIN v7 persistent hedge timeout cancel oid=%s cancelled=%s | %s | "
+                        "elapsed=%d cancel_at_elapsed=%s wall_fallback=%s",
                         order_id[:24] + "…",
                         cancelled,
                         self._active_limit_order_reason,
+                        t,
+                        cancel_at_el,
+                        wall_deadline_hit,
                     )
-                    self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                    confirm_deadline = now + max(4.0, 2.0)
+                    while time.time() < confirm_deadline:
+                        try:
+                            order_state = self.trader.get_order(order_id)
+                        except Exception:
+                            order_state = None
+                        if order_state is None:
+                            break
+                        stt = str(order_state.get("status") or order_state.get("order_status") or "")
+                        if self._order_status_is_closed(stt):
+                            break
+                        time.sleep(0.2)
+                    self._finalize_active_limit_fill(contract, st, t=t, order_state=order_state)
+                    self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, time.time() + 0.5)
                     return True
-                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 0.25)
                 self._active_limit_order_absent_checks = 0
-                return True
+                return False
         try:
             open_orders = self.trader.get_open_orders()
         except Exception as exc:
             LOGGER.debug("PALADIN v7 persistent get_open_orders %s: %s", order_id[:18], exc)
             self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
-            return True
+            return False
         for od in open_orders:
             oid = str(od.get("id") or od.get("orderID") or od.get("order_id") or "")
             if oid == order_id:
-                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+                self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 0.25)
                 self._active_limit_order_absent_checks = 0
-                return True
+                return False
         self._active_limit_order_absent_checks += 1
         if self._active_limit_order_absent_checks < 2:
             self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 0.8)
-            return True
+            return False
         if not self._active_limit_order_cancel_requested:
             LOGGER.warning(
                 "PALADIN v7 persistent order %s missing before timeout cancel; still holding | %s",
@@ -691,7 +723,7 @@ class PaladinV7LiveEngine:
                 self._active_limit_order_reason,
             )
             self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
-            return True
+            return False
         self._finalize_active_limit_fill(contract, st, t=t, order_state=order_state)
         return True
 
@@ -752,6 +784,7 @@ class PaladinV7LiveEngine:
         min_notional: float,
         min_shares: float,
         persistent_limit_until_ts: float | None = None,
+        persistent_cancel_at_elapsed: int | None = None,
     ) -> float:
         px = float(px)
         px = round(px, 4)
@@ -889,6 +922,8 @@ class PaladinV7LiveEngine:
             self._active_limit_order_api_before = api_before
             self._active_limit_order_force_cancel_ts = float(persistent_limit_until_ts)
             self._active_limit_order_persistent = True
+            if persistent_cancel_at_elapsed is not None:
+                self._active_limit_order_cancel_at_elapsed = int(persistent_cancel_at_elapsed)
             self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, time.time() + 0.8)
             self._limit_order_busy_reason = str(reason)
             LOGGER.info(
@@ -1506,7 +1541,12 @@ class PaladinV7LiveEngine:
         if self._process_persistent_limit_order(contract, runner.st, t=elapsed, now=now):
             return
         if self._has_unresolved_active_limit_order(now):
-            return
+            # Resting cheap hedge must not block ``paladin_v7_step`` (forced hedge uses window ``elapsed``).
+            if not (
+                self._active_limit_order_persistent
+                and str(self._active_limit_order_reason) == "v7_hedge_cheap"
+            ):
+                return
         if self._has_untracked_open_buy_order(contract, now):
             return
         if now < self._limit_order_busy_until_ts - 1e-9:
@@ -1575,15 +1615,18 @@ class PaladinV7LiveEngine:
         ) -> float:
             px_eff = float(px)
             persistent_limit_until_ts: float | None = None
+            persistent_cancel_at_elapsed: int | None = None
             mh = float(self.config.paladin_v7_cheap_pair_avg_sum_nonforced_max)
             slip = float(self.config.paladin_v7_cheap_hedge_slip_buffer)
             # First hedges from a one-sided book still use the held+opp pair-cost cap.
             # Once both sides exist, the strategy itself already gated on a better smaller-side price.
             if reason == "v7_hedge_cheap" and runner.pending_second is not None:
                 t0 = int(runner.pending_second[3])
-                age = max(0.0, float(elapsed) - float(t0))
-                remain_to_force = max(0.0, float(self.config.paladin_v7_hedge_timeout_seconds) - age)
-                persistent_limit_until_ts = time.time() + remain_to_force
+                ht = float(self.config.paladin_v7_hedge_timeout_seconds)
+                # Cancel resting cheap hedge at the same window-second deadline as sim ``ok_forced`` (t0 + timeout).
+                persistent_cancel_at_elapsed = t0 + int(math.ceil(ht))
+                # Wall-clock fallback only (elapsed-based cancel is authoritative for v7_hedge_cheap).
+                persistent_limit_until_ts = time.time() + max(600.0, ht + 600.0)
                 if min(float(st.size_up), float(st.size_down)) < float(self.config.paladin_v7_min_shares) - 1e-9:
                     avg_first = float(runner.pending_second[2])
                     px_eff = min(px_eff, max(0.01, mh - avg_first - slip - 1e-4))
@@ -1618,6 +1661,7 @@ class PaladinV7LiveEngine:
                 min_notional=min_notional,
                 min_shares=min_shares,
                 persistent_limit_until_ts=persistent_limit_until_ts,
+                persistent_cancel_at_elapsed=persistent_cancel_at_elapsed,
             )
 
         # Exactly one strategy step per market second (see module docstring).

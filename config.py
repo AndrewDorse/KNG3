@@ -75,6 +75,8 @@ def _normalize_strategy_mode(raw: str | None) -> str:
         return "paladin"
     if s in ("paladin_v7", "paladin7", "paladin_v7_live", "kng3", "kng3_live"):
         return "paladin_v7"
+    if s in ("paladin_v9", "paladin9", "paladin_v9_live", "kng3_v9", "v9_live"):
+        return "paladin_v9"
     if s in ("iy2", "iy_2", "wallet_overlap", "wallet_overlap_live", "iy2_live"):
         return "iy2"
     if s in ("iy3", "iy_3", "wallet_overlap_path", "wallet_overlap_path_live", "iy3_live"):
@@ -137,7 +139,7 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # paladin | paladin_v7 | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
+    # paladin | paladin_v7 | paladin_v9 | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
     strategy_mode: str = "paladin_v7"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
@@ -322,9 +324,13 @@ class BotConfig:
             perp15_ladder = [0.44, 0.43, 0.40]
 
         raw_mode = _normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "paladin_v7"))
-        default_strategy_budget = 10.0 if raw_mode == "paladin_v7" else 80.0
+        default_strategy_budget = (
+            400.0
+            if raw_mode == "paladin_v9"
+            else (10.0 if raw_mode == "paladin_v7" else 80.0)
+        )
 
-        return cls(
+        cfg = cls(
             private_key=private_key.strip(),
             funder=funder,
             bot_version=os.getenv("BOT_VERSION", "paladin-v7-binance-spike-2026-04-21").strip(),
@@ -561,6 +567,15 @@ class BotConfig:
                 2.0, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_COOLDOWN_SEC", 10.0)
             ),
         )
+        if cfg.strategy_mode in ("paladin_v7", "paladin_v9") and (
+            cfg.strategy_budget_cap_usdc + 1e-9 < cfg.strategy_min_budget_usdc
+        ):
+            raise BotConfigError(
+                f"BOT_STRATEGY_BUDGET_CAP_USDC ({cfg.strategy_budget_cap_usdc}) must be >= "
+                f"BOT_STRATEGY_MIN_BUDGET_USDC ({cfg.strategy_min_budget_usdc}) for strategy_mode="
+                f"{cfg.strategy_mode!r}"
+            )
+        return cfg
 
 
 # ---------------------------------------------------------------------------

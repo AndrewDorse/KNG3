@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-# Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: spike-only v7, 5/25 clip+cap, 30s hedge timeout + forced-over-cheap, resting cheap hedge,
-# FAK fill clamp, post-buy/reconcile add caps; .env.example hedge timeout 30 + min shares/notional.
-ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v9-hardcap5-fak-clamp-hedge30-env
-LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
+# Bump when syncing Paladin v7/v9 from kng_bot3 (labels only; COPY list below is the real contract).
+# Sync from kng_bot3: spike-only v7 kernel, v9 live entry; 5/25 clip+cap, 30s hedge timeout + forced-over-cheap,
+# resting cheap hedge, FAK fill clamp, post-buy/reconcile add caps; config validates budget >= min for v7/v9.
+ARG KNG3_IMAGE_TAG=2026-04-25-kng3-paladin-v9-docker-entry-sync
+LABEL org.opencontainers.image.title="KNG3 Paladin v7/v9" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -21,7 +21,7 @@ RUN pip install --upgrade pip && \
     pip install -r /app/requirements.txt
 
 COPY main.py /app/main.py
-# Guard: baked main must be KNG3 v7-only entry (no top-level btc15 import).
+# Guard: baked main must be KNG3 paladin-only entry (no top-level btc15 import).
 RUN python -c "s=open('/app/main.py',encoding='utf-8').read(); assert 'btc15_redeem_engine' not in s, 'main.py must not name btc15_redeem_engine'"
 COPY config.py /app/config.py
 COPY trader.py /app/trader.py
@@ -31,6 +31,7 @@ COPY http_session.py /app/http_session.py
 COPY clob_fak.py /app/clob_fak.py
 COPY polymarket_ws.py /app/polymarket_ws.py
 COPY paladin_v7_live_engine.py /app/paladin_v7_live_engine.py
+COPY paladin_v9_live_engine.py /app/paladin_v9_live_engine.py
 COPY btc15_redeem_engine.py /app/btc15_redeem_engine.py
 COPY paladin_live_engine.py /app/paladin_live_engine.py
 COPY signal_analyzer.py /app/signal_analyzer.py
