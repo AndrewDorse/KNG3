@@ -231,7 +231,7 @@ class BotConfig:
     paladin_v7_cheap_hedge_slip_buffer: float = 0.012
     # Seconds after first leg before a *cheap* hedge may execute (0 = immediate when gate passes).
     paladin_v7_cheap_hedge_min_delay_sec: float = 0.0
-    paladin_v7_hedge_timeout_seconds: float = 60.0
+    paladin_v7_hedge_timeout_seconds: float = 30.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
     # Legacy layer-entry cooldown kept on config; spike-only mode no longer uses a non-spike layer path.
     paladin_v7_layer2_cooldown_sec: float = 5.0
@@ -497,7 +497,7 @@ class BotConfig:
             paladin_v7_cheap_hedge_min_delay_sec=max(
                 0.0, _env_float("BOT_PALADIN_V7_CHEAP_HEDGE_MIN_DELAY_SEC", 0.0)
             ),
-            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 60.0)),
+            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 30.0)),
             paladin_v7_forced_hedge_max_book_sum=min(
                 1.50, max(1.0, _env_float("BOT_PALADIN_V7_FORCED_HEDGE_SUM_MAX", 1.30))
             ),

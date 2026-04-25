@@ -5,10 +5,29 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 LOGGER = logging.getLogger("polymarket_btc_ladder")
+
+
+def _cap_fak_fill_to_requested(
+    requested_shares: int, filled_sh: float, filled_usdc: float
+) -> tuple[float, float, float]:
+    """Outcome shares must never exceed what we asked the CLOB to buy (mis-parsed takingAmount, etc.)."""
+    cap = float(max(0, int(requested_shares)))
+    if filled_sh <= cap + 1e-6:
+        apx = (filled_usdc / filled_sh) if filled_sh > 1e-12 else 0.0
+        return filled_sh, filled_usdc, apx
+    LOGGER.warning(
+        "CLOB FAK: clamping filled_shares %.6f down to requested %.6f (usdc scaled)",
+        filled_sh,
+        cap,
+    )
+    scale = cap / filled_sh if filled_sh > 1e-12 else 0.0
+    new_usdc = filled_usdc * scale
+    apx = (new_usdc / cap) if cap > 1e-12 else 0.0
+    return cap, new_usdc, apx
 
 
 @dataclass(slots=True)
@@ -112,7 +131,9 @@ def parse_fak_buy_post_response(
         filled_usdc = filled_sh * limit_price
         LOGGER.debug("FAK post: matched but no amounts; assuming full @ limit")
 
-    avg_px = (filled_usdc / filled_sh) if filled_sh > 1e-12 else float(limit_price)
+    filled_sh, filled_usdc, avg_px = _cap_fak_fill_to_requested(requested_shares, filled_sh, filled_usdc)
+    if avg_px <= 1e-12:
+        avg_px = float(limit_price)
 
     ok = filled_sh > 1e-12
     if status in {"unmatched"} and filled_sh <= 1e-12:
@@ -205,7 +226,16 @@ def fak_buy_with_confirm(
         limit_price=limit_price,
     )
     if base.filled_shares > 1e-9:
-        return base
+        sh, usdc, apx = _cap_fak_fill_to_requested(requested_shares, base.filled_shares, base.filled_usdc)
+        if apx <= 1e-12:
+            apx = base.avg_price
+        return replace(
+            base,
+            filled_shares=sh,
+            filled_usdc=usdc,
+            avg_price=apx,
+            ok=sh > 1e-9,
+        )
     if not base.order_id:
         return base
     if not confirm:
@@ -230,6 +260,9 @@ def fak_buy_with_confirm(
             error="no_fill_confirmed",
             raw=base.raw,
         )
+    sh, usdc, apx = _cap_fak_fill_to_requested(requested_shares, sh, usdc)
+    if apx <= 1e-12 and sh > 1e-12:
+        apx = usdc / sh
     return FakBuyResult(
         ok=True,
         order_id=base.order_id,

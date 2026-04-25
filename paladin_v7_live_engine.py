@@ -41,6 +41,10 @@ from paladin_v7 import (  # noqa: E402
 from paladin_engine import apply_buy_fill  # noqa: E402
 from simulate_paladin_window import SimState, Trade, try_buy as sim_try_buy  # noqa: E402
 
+# Hard ceiling for any *single* CLOB BUY this engine posts for PALADIN v7 (spike, hedge, flatten).
+# Config may mis-read; API fallbacks may spike — this value is never exceeded for order size / adds.
+V7_LIVE_MAX_SHARES_PER_SINGLE_ORDER = 5
+
 
 def _can_afford_live(spent: float, add: float, budget: float) -> bool:
     return spent + add <= budget + 1e-6
@@ -415,6 +419,12 @@ class PaladinV7LiveEngine:
         self._api_reality_last_d = -1.0
         self._api_reality_next_check_ts = 0.0
 
+    def _v7_max_single_buy_shares(self) -> int:
+        """Configured base clip, capped at V7_LIVE_MAX_SHARES_PER_SINGLE_ORDER (never trust env alone)."""
+        raw = int(round(float(self.config.paladin_v7_base_order_shares)))
+        raw = max(1, raw)
+        return int(min(V7_LIVE_MAX_SHARES_PER_SINGLE_ORDER, raw))
+
     def _clip_cap_for_reason(self, reason: str) -> int:
         fixed_clip_reasons = {
             "v7_first_window_lead",
@@ -426,8 +436,7 @@ class PaladinV7LiveEngine:
             "v7_hedge_forced",
             "v7_api_imbalance_flatten",
         }
-        base_clip = max(1, int(round(float(self.config.paladin_v7_base_order_shares))))
-        return base_clip if str(reason) in fixed_clip_reasons else 10**9
+        return self._v7_max_single_buy_shares() if str(reason) in fixed_clip_reasons else 10**9
 
     def _cap_requested_live_size(self, shares: float, reason: str) -> int:
         raw_size = max(0, int(round(float(shares))))
@@ -577,7 +586,7 @@ class PaladinV7LiveEngine:
                 api_after = api_before
             delta_api = max(0.0, api_after - api_before)
             if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
-                filled = delta_api
+                filled = min(delta_api, float(req_shares))
         filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
         if filled > 1e-9:
             avg_px = self._confirm_live_buy_avg_price(
@@ -597,7 +606,9 @@ class PaladinV7LiveEngine:
                 reason=reason,
                 order_id=order_id,
             )
-            self._align_leg_to_api_after_live_buy(contract, st, t=t, side=side, px_hint=avg_px)
+            self._align_leg_to_api_after_live_buy(
+                contract, st, t=t, side=side, px_hint=avg_px, max_positive_delta=float(req_shares)
+            )
         elif self._order_status_is_closed(status):
             LOGGER.info(
                 "PALADIN v7 active limit closed with no fill | %s | oid=%s",
@@ -820,9 +831,9 @@ class PaladinV7LiveEngine:
                 except Exception as exc:
                     LOGGER.debug("PALADIN v7 market post-buy balance read skipped: %s", exc)
                     api_after = api_before
-                delta_api = max(0.0, api_after - api_before)
-                if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
-                    filled = delta_api
+            delta_api = max(0.0, api_after - api_before)
+            if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
+                filled = min(delta_api, float(req_shares))
             filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
             if filled <= 1e-9:
                 return 0.0
@@ -848,7 +859,9 @@ class PaladinV7LiveEngine:
                 reason=reason,
                 order_id=order_id,
             )
-            self._align_leg_to_api_after_live_buy(contract, st, t=t, side=side, px_hint=avg_px)
+            self._align_leg_to_api_after_live_buy(
+                contract, st, t=t, side=side, px_hint=avg_px, max_positive_delta=float(req_shares)
+            )
             return filled
         self._live_order_serial += 1
         order_id = ""
@@ -943,7 +956,7 @@ class PaladinV7LiveEngine:
                 api_after = api_before
             delta_api = max(0.0, api_after - api_before)
             if delta_api > max(1e-9, float(self.config.paladin_v7_reconcile_share_tolerance)):
-                filled = delta_api
+                filled = min(delta_api, float(req_shares))
                 avg_px = px
                 spent = filled * avg_px
         filled = self._cap_confirmed_fill(filled, req_shares, reason, order_id)
@@ -971,7 +984,9 @@ class PaladinV7LiveEngine:
             reason=reason,
             order_id=order_id,
         )
-        self._align_leg_to_api_after_live_buy(contract, st, t=t, side=side, px_hint=avg_px)
+        self._align_leg_to_api_after_live_buy(
+            contract, st, t=t, side=side, px_hint=avg_px, max_positive_delta=float(req_shares)
+        )
         return filled
 
     @staticmethod
@@ -1009,10 +1024,17 @@ class PaladinV7LiveEngine:
         t: int,
         side: str,
         px_hint: float,
+        max_positive_delta: float | None = None,
     ) -> None:
-        """One refresh vs CLOB balance for the bought token; only add missing shares immediately after a buy."""
+        """One refresh vs CLOB balance for the bought token; only add missing shares immediately after a buy.
+
+        ``max_positive_delta`` caps how many shares we will *add* in this align (the size we just
+        ordered, or reconcile tolerance when None). Prevents a bogus API jump from inflating inventory.
+        """
         tok = contract.up if side == "up" else contract.down
         tol = float(self.config.paladin_v7_reconcile_share_tolerance)
+        pos_cap = float(max_positive_delta) if max_positive_delta is not None else tol
+        pos_cap = max(0.0, min(float(self._v7_max_single_buy_shares()), pos_cap))
         cur = float(st.size_up) if side == "up" else float(st.size_down)
         if cur < 1e-6:
             return
@@ -1053,6 +1075,16 @@ class PaladinV7LiveEngine:
                 cur,
             )
             return
+        if delta > pos_cap + 1e-6:
+            LOGGER.error(
+                "PALADIN v7 post-buy: clamping API add %s delta=%.4f -> cap=%.4f (API=%.4f model=%.4f)",
+                side.upper(),
+                delta,
+                pos_cap,
+                api,
+                cur,
+            )
+        delta = min(delta, pos_cap)
         su, au, sd, ad = apply_buy_fill(
             st.size_up,
             st.avg_up,
@@ -1101,6 +1133,15 @@ class PaladinV7LiveEngine:
             if abs(delta) <= 1e-9:
                 continue
             if delta > 0:
+                mx = float(self._v7_max_single_buy_shares())
+                if delta > mx + 1e-6:
+                    LOGGER.warning(
+                        "PALADIN v7 reconcile: capping positive %s add %.4f -> %.4f (API vs model)",
+                        side,
+                        delta,
+                        mx,
+                    )
+                    delta = mx
                 fill_px = float(self._latest_exec_fill_price(st, side) or pm)
                 su, au, sd, ad = apply_buy_fill(
                     st.size_up,
@@ -1272,7 +1313,7 @@ class PaladinV7LiveEngine:
         cur_light = float(st.size_down) if imb > 0 else float(st.size_up)
         room = max(0.0, cap - cur_light)
         need = abs(imb)
-        clip = float(self.config.paladin_v7_base_order_shares)
+        clip = float(self._v7_max_single_buy_shares())
         sh = float(min(need, clip, room))
         if sh < float(self.config.paladin_v7_min_shares) - 1e-9:
             LOGGER.info(

@@ -69,7 +69,7 @@ class PaladinV7Params:
     # Do not allow ok_cheap until first-leg age >= this (seconds since first leg). 0 = legacy: hedge as soon
     # as the cheap gate passes. Forced hedge at hedge_timeout_seconds is unaffected.
     cheap_hedge_min_delay_sec: float = 0.0
-    hedge_timeout_seconds: float = 60.0
+    hedge_timeout_seconds: float = 30.0
     # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
@@ -365,10 +365,11 @@ def paladin_v7_step(
             sh_exec = _clamp_shares(st, side_o, hedge_target, balance_cap, hedge_min_sh)
             if sh_exec >= hedge_min_sh - 1e-9:
                 hedge_mn = float(p.min_notional)
-                px_exec = float(cheap_limit_px) if ok_cheap and not ok_forced else px_o
+                # Once timeout hits, force must take precedence over the resting cheap path.
+                px_exec = px_o if ok_forced else float(cheap_limit_px)
                 if sh_exec * px_exec + 1e-9 < hedge_mn:
                     return
-                reason = "v7_hedge_forced" if ok_forced and not ok_cheap else "v7_hedge_cheap"
+                reason = "v7_hedge_forced" if ok_forced else "v7_hedge_cheap"
                 filled = buy(
                     st,
                     t=t,
@@ -465,6 +466,7 @@ def run_window_v7(
     params: PaladinV7Params | None = None,
     try_buy_fn: TryBuyFn | None = None,
 ) -> SimState:
+    """Instant-fill replay (no spike / cheap delay). Batch PnL uses ``paladin_v7_delay2s_replay`` instead."""
     p = params or PaladinV7Params()
     runner = PaladinV7Runner()
     for t in range(len(ticks)):

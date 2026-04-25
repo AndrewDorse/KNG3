@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
 # Bump when syncing Paladin v7 from kng_bot3 (labels only; COPY list below is the real contract).
-# Sync from kng_bot3: hard-clamps live clips, posts resting hedges immediately after imbalance, uses 20c..80c balanced re-entry band, and starts hedge deduction at 8c.
-ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v8-fixed-clip-resting-hedge
+# Sync from kng_bot3: spike-only v7, 5/25 clip+cap, 30s hedge timeout + forced-over-cheap, resting cheap hedge,
+# FAK fill clamp, post-buy/reconcile add caps; .env.example hedge timeout 30 + min shares/notional.
+ARG KNG3_IMAGE_TAG=2026-04-25-kng3-v9-hardcap5-fak-clamp-hedge30-env
 LABEL org.opencontainers.image.title="KNG3 Paladin v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
