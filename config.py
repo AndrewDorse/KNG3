@@ -218,6 +218,8 @@ class BotConfig:
     paladin_v7_volume_floor: float = 1e-6
     paladin_v7_btc_abs_move_min_usd: float = 2.0
     paladin_v7_first_leg_max_pm: float = 0.62
+    # Extra price buffer for marketable BTC-spike entries so they cross reliably when the book moves fast.
+    paladin_v7_spike_market_price_buffer: float = 0.02
     paladin_v7_cheap_other_margin: float = 0.04
     paladin_v7_cheap_pair_sum_max: float = 0.99
     # Max *our* pair cost: cheap hedge held VWAP + opposite + slip (not raw pm_u+pm_d).
@@ -465,6 +467,9 @@ class BotConfig:
             paladin_v7_volume_floor=max(0.0, _env_float("BOT_PALADIN_V7_VOL_FLOOR", 1e-6)),
             paladin_v7_btc_abs_move_min_usd=max(0.0, _env_float("BOT_PALADIN_V7_BTC_MOVE_MIN_USD", 2.0)),
             paladin_v7_first_leg_max_pm=min(0.99, max(0.01, _env_float("BOT_PALADIN_V7_FIRST_LEG_MAX_PM", 0.62))),
+            paladin_v7_spike_market_price_buffer=max(
+                0.0, min(0.05, _env_float("BOT_PALADIN_V7_SPIKE_MARKET_PRICE_BUFFER", 0.02))
+            ),
             paladin_v7_cheap_other_margin=max(0.0, _env_float("BOT_PALADIN_V7_CHEAP_OTHER_MARGIN", 0.04)),
             paladin_v7_cheap_pair_sum_max=min(1.0, _env_float("BOT_PALADIN_V7_CHEAP_PAIR_SUM_MAX", 0.99)),
             paladin_v7_cheap_pair_avg_sum_nonforced_max=min(

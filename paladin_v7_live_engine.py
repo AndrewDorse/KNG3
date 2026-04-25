@@ -58,6 +58,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         volume_floor=float(cfg.paladin_v7_volume_floor),
         btc_abs_move_min_usd=float(cfg.paladin_v7_btc_abs_move_min_usd),
         first_leg_max_pm=float(cfg.paladin_v7_first_leg_max_pm),
+        # Live-only execution buffer is handled below in try_buy_fn; sim path keeps pure strategy prices.
         cheap_other_margin=float(cfg.paladin_v7_cheap_other_margin),
         cheap_pair_sum_max=float(cfg.paladin_v7_cheap_pair_sum_max),
         cheap_pair_avg_sum_nonforced_max=float(cfg.paladin_v7_cheap_pair_avg_sum_nonforced_max),
@@ -1383,6 +1384,12 @@ class PaladinV7LiveEngine:
                     # Forced hedge should be willing to pay the current ask; otherwise "forced"
                     # can keep posting near the mid and miss indefinitely.
                     px_eff = max(px_eff, ask)
+            elif reason in {"v7_first_binance_spike", "v7_balanced_btc_spike"}:
+                tok = contract.up if side == "up" else contract.down
+                ask = self._best_ask_price(tok)
+                spike_buf = float(self.config.paladin_v7_spike_market_price_buffer)
+                ask_cross = (float(ask) + min(0.01, spike_buf)) if ask is not None else 0.0
+                px_eff = min(0.99, max(px_eff + spike_buf, ask_cross))
             return self._live_buy(
                 contract,
                 st,
