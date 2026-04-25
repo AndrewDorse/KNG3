@@ -138,6 +138,11 @@ class PaladinV7LiveEngine:
         self._active_limit_order_api_before: float = 0.0
         self._active_limit_order_force_cancel_ts: float = 0.0
         self._active_limit_order_persistent: bool = False
+        self._last_untracked_open_order_log_ts: float = 0.0
+        self._api_reality_mismatch_count: int = 0
+        self._api_reality_last_u: float = -1.0
+        self._api_reality_last_d: float = -1.0
+        self._api_reality_next_check_ts: float = 0.0
         self._pre_window_warned_slug: str | None = None
         self._force_exit_warned_slug: str | None = None
         self._entry_delay_warned_slug: str | None = None
@@ -183,6 +188,11 @@ class PaladinV7LiveEngine:
             float(self.config.paladin_v7_reconcile_share_tolerance),
             int(self.config.paladin_v7_reconcile_confirm_reads),
             self.config.paladin_v7_reconcile_flatten,
+        )
+        LOGGER.info(
+            "PALADIN v7 API reality override | balanced_probe=%d reads every %.1fs",
+            int(self.config.paladin_v7_api_reality_confirm_reads),
+            float(self.config.paladin_v7_api_reality_confirm_interval_seconds),
         )
         LOGGER.info(
             "PALADIN v7 order mode | spike_entry=market hedge_cheap=resting_limit forced_hedge=aggressive_limit "
@@ -395,6 +405,58 @@ class PaladinV7LiveEngine:
         self._active_limit_order_persistent = False
         self._limit_order_busy_until_ts = 0.0
         self._limit_order_busy_reason = ""
+
+    def _reset_api_reality_probe(self) -> None:
+        self._api_reality_mismatch_count = 0
+        self._api_reality_last_u = -1.0
+        self._api_reality_last_d = -1.0
+        self._api_reality_next_check_ts = 0.0
+
+    @staticmethod
+    def _order_token_id(order: dict[str, Any]) -> str:
+        for key in ("asset_id", "assetId", "token_id", "tokenId", "market_id", "marketId"):
+            raw = order.get(key)
+            if raw not in (None, ""):
+                return str(raw)
+        return ""
+
+    @staticmethod
+    def _order_side_value(order: dict[str, Any]) -> str:
+        raw = order.get("side")
+        if raw in (None, ""):
+            return ""
+        return str(raw).strip().lower()
+
+    def _has_untracked_open_buy_order(self, contract: ActiveContract, now: float) -> bool:
+        known_id = str(self._active_limit_order_id or "")
+        active_tokens = {str(contract.up.token_id), str(contract.down.token_id)}
+        try:
+            open_orders = self.trader.get_open_orders()
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 stray open-order check skipped: %s", exc)
+            return False
+        for od in open_orders:
+            oid = str(od.get("id") or od.get("orderID") or od.get("order_id") or "")
+            if known_id and oid == known_id:
+                continue
+            tok = self._order_token_id(od)
+            if not tok or tok not in active_tokens:
+                continue
+            side = self._order_side_value(od)
+            if side and side not in {"buy", "bid"}:
+                continue
+            self._limit_order_busy_until_ts = max(self._limit_order_busy_until_ts, now + 1.0)
+            self._limit_order_busy_reason = "untracked_open_order"
+            if now - self._last_untracked_open_order_log_ts >= 5.0:
+                self._last_untracked_open_order_log_ts = now
+                LOGGER.warning(
+                    "PALADIN v7 blocking new buy: exchange still shows open order oid=%s token=%s side=%s",
+                    oid[:24] + "…" if oid else "?",
+                    tok[:16] + "…" if tok else "?",
+                    side or "?",
+                )
+            return True
+        return False
 
     def _has_unresolved_active_limit_order(self, now: float, limit_px: float | None = None) -> bool:
         order_id = str(self._active_limit_order_id or "")
@@ -645,6 +707,14 @@ class PaladinV7LiveEngine:
     ) -> float:
         px = float(px)
         px = round(px, 4)
+        now = time.time()
+        if self._has_unresolved_active_limit_order(now):
+            LOGGER.warning("PALADIN v7 refusing new %s order while tracked order is still unresolved", reason)
+            return 0.0
+        if self._has_untracked_open_buy_order(contract, now):
+            LOGGER.warning("PALADIN v7 refusing new %s order while exchange still shows an open buy", reason)
+            return 0.0
+        self._reset_api_reality_probe()
         exchange_min_shares = int(math.ceil(float(self.config.paladin_v7_min_shares)))
         raw_size = int(round(float(shares)))
         capped_reasons = {
@@ -1079,6 +1149,76 @@ class PaladinV7LiveEngine:
             t0 = self._hedge_t0_preserve_on_resync(prev, "up", elapsed)
             runner.pending_second = ("up", float(-du), float(st.avg_down), t0)
 
+    def _maybe_accept_api_balance_reality(
+        self,
+        contract: ActiveContract,
+        runner: PaladinV7Runner,
+        pm_u: float,
+        pm_d: float,
+        now: float,
+        elapsed: int,
+    ) -> bool:
+        st = runner.st
+        bal_tol = float(self.config.paladin_v7_balance_share_tolerance)
+        model_gap = abs(float(st.size_up) - float(st.size_down))
+        if model_gap > bal_tol + 1e-9:
+            self._reset_api_reality_probe()
+            return False
+        if now < self._api_reality_next_check_ts - 1e-9:
+            return self._api_reality_mismatch_count > 0
+        self._api_reality_next_check_ts = now + float(self.config.paladin_v7_api_reality_confirm_interval_seconds)
+        try:
+            api_u = float(self.trader.token_balance_allowance_refreshed(contract.up.token_id))
+            api_d = float(self.trader.token_balance_allowance_refreshed(contract.down.token_id))
+        except Exception as exc:
+            LOGGER.debug("PALADIN v7 balanced-state API reality check skipped: %s", exc)
+            return self._api_reality_mismatch_count > 0
+        tol = float(self.config.paladin_v7_reconcile_share_tolerance)
+        api_gap = abs(api_u - api_d)
+        if api_gap <= max(tol, bal_tol):
+            self._reset_api_reality_probe()
+            return False
+        if abs(api_u - float(st.size_up)) <= tol and abs(api_d - float(st.size_down)) <= tol:
+            self._reset_api_reality_probe()
+            return False
+        stable = (
+            self._api_reality_last_u >= 0.0
+            and abs(api_u - self._api_reality_last_u) <= tol
+            and abs(api_d - self._api_reality_last_d) <= tol
+        )
+        if stable:
+            self._api_reality_mismatch_count += 1
+        else:
+            self._api_reality_mismatch_count = 1
+            self._api_reality_last_u = api_u
+            self._api_reality_last_d = api_d
+        need = max(1, int(self.config.paladin_v7_api_reality_confirm_reads))
+        LOGGER.info(
+            "PALADIN v7 balanced-state API check | model U=%.4f D=%.4f | API U=%.4f D=%.4f | gap=%.3f | streak=%d/%d",
+            st.size_up,
+            st.size_down,
+            api_u,
+            api_d,
+            api_gap,
+            self._api_reality_mismatch_count,
+            need,
+        )
+        if self._api_reality_mismatch_count < need:
+            return True
+        LOGGER.warning(
+            "PALADIN v7 accepting API reality after %d balanced-state confirmations: model U=%.4f D=%.4f -> API U=%.4f D=%.4f",
+            need,
+            st.size_up,
+            st.size_down,
+            api_u,
+            api_d,
+        )
+        self._reset_api_reality_probe()
+        self._v7_window_reconcile_applies += 1
+        self._sync_state_to_api_balances(runner, api_u, api_d, pm_u, pm_d, elapsed)
+        self._resync_pending_second_after_reconcile(runner, elapsed)
+        return True
+
     def _maybe_flatten_inventory(
         self,
         contract: ActiveContract,
@@ -1219,6 +1359,8 @@ class PaladinV7LiveEngine:
             self._v7_window_reconcile_applies = 0
             self._v7_window_flatten_fills = 0
             self._live_order_serial = 0
+            self._last_untracked_open_order_log_ts = 0.0
+            self._reset_api_reality_probe()
             if not self._active_limit_order_id:
                 self._limit_order_busy_until_ts = 0.0
                 self._limit_order_busy_reason = ""
@@ -1295,12 +1437,16 @@ class PaladinV7LiveEngine:
             return
         if self._has_unresolved_active_limit_order(now):
             return
+        if self._has_untracked_open_buy_order(contract, now):
+            return
         if now < self._limit_order_busy_until_ts - 1e-9:
             return
 
         order_serial_0 = self._live_order_serial
         self._maybe_reconcile_and_flatten(contract, runner, float(pm_u), float(pm_d), now, elapsed)
         if self._live_order_serial != order_serial_0:
+            return
+        if self._maybe_accept_api_balance_reality(contract, runner, float(pm_u), float(pm_d), now, elapsed):
             return
         pend = runner.pending_second
 

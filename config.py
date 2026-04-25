@@ -257,6 +257,10 @@ class BotConfig:
     paladin_v7_reconcile_interval_seconds: float = 5.0
     paladin_v7_reconcile_share_tolerance: float = 0.35
     paladin_v7_reconcile_confirm_reads: int = 2
+    # Extra safety: when the model says "balanced" but API keeps reporting imbalance, trust API only after
+    # repeated stable reads so one stale allowance response cannot trigger unnecessary hedge churn.
+    paladin_v7_api_reality_confirm_reads: int = 5
+    paladin_v7_api_reality_confirm_interval_seconds: float = 2.0
     paladin_v7_reconcile_flatten: bool = True
     paladin_v7_reconcile_flatten_min_imbalance: float = 0.25
     paladin_v7_reconcile_flatten_cooldown_seconds: float = 10.0
@@ -529,6 +533,12 @@ class BotConfig:
                 0.05, _env_float("BOT_PALADIN_V7_RECONCILE_SHARE_TOL", 0.35)
             ),
             paladin_v7_reconcile_confirm_reads=max(1, _env_int("BOT_PALADIN_V7_RECONCILE_CONFIRM_READS", 2)),
+            paladin_v7_api_reality_confirm_reads=max(
+                1, _env_int("BOT_PALADIN_V7_API_REALITY_CONFIRM_READS", 5)
+            ),
+            paladin_v7_api_reality_confirm_interval_seconds=max(
+                0.5, _env_float("BOT_PALADIN_V7_API_REALITY_CONFIRM_INTERVAL_SEC", 2.0)
+            ),
             paladin_v7_reconcile_flatten=_env_bool("BOT_PALADIN_V7_RECONCILE_FLATTEN", True),
             paladin_v7_reconcile_flatten_min_imbalance=max(
                 0.05, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_MIN_IMB", 0.25)

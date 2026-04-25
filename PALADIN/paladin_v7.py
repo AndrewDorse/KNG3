@@ -5,6 +5,7 @@ PALADIN v7 (sim): BTC-spike entries only, with the current balance-first hedge l
 1) **New risk** opens only on BTC volume spike + price jump. This applies when flat and also when an
    existing book is already balanced. Side = BTC momentum direction, subject to ``first_leg_max_pm``,
    base-order share sizing, and the normal pair cooldown when re-entering from a balanced book.
+   Balanced re-entry clips are additionally ignored unless the buy price is inside the 15c..85c band.
 2) **Second leg / rebalance**: every material imbalance uses one ``pending_second`` path. Cheap first hedge still
    uses ``opened_avg + opposite_px + slip <= _nonforced_pair_cap()``. Cheap re-balance after later entries uses the
    avg of the *opposite VWAP side* plus the current price of the side being bought, plus slip. That means
@@ -405,6 +406,8 @@ def paladin_v7_step(
     if mom is None:
         return
     px_1 = pm_u if mom == "up" else pm_d
+    if (not flat) and (px_1 < 0.15 - 1e-9 or px_1 > 0.85 + 1e-9):
+        return
     if px_1 + 1e-9 > float(p.first_leg_max_pm):
         return
     sh1 = _entry_shares(
