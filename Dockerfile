@@ -3,7 +3,7 @@ FROM python:3.11-slim
 # Bump when syncing Paladin v7/v9 from kng_bot3 (labels only; COPY list below is the real contract).
 # Sync from kng_bot3: spike-only v7 kernel, v9 live entry; 5/25 clip+cap, 30s hedge timeout + forced-over-cheap,
 # resting cheap hedge, FAK fill clamp, post-buy/reconcile add caps; config validates budget >= min for v7/v9.
-ARG KNG3_IMAGE_TAG=2026-04-25-tape-gate-try-buy-v7-live-sync
+ARG KNG3_IMAGE_TAG=2026-04-25-default-strategy-paladin-v9
 LABEL org.opencontainers.image.title="KNG3 Paladin v7/v9" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
