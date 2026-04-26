@@ -292,6 +292,7 @@ class ShamanV1Engine:
         *,
         label: str,
         interval_ms: int,
+        window_minutes: int,
         rules: list[dict[str, Any]],
         closed_open_ms: int,
         o: list[float],
@@ -318,7 +319,7 @@ class ShamanV1Engine:
         shares = 0
         token_id: str | None = None
         slug = ""
-        contract = self.locator.get_active_contract()
+        contract = self.locator.get_active_contract_for_window_minutes(window_minutes)
         if contract is not None:
             slug = contract.slug
         action = "no_PM_order"
@@ -358,8 +359,9 @@ class ShamanV1Engine:
             action = "PM_skip no_contract"
 
         _LOG.info(
-            "%s WINDOW_START closed_signal_open_ms=%s next_bar_open_ms=%s %s | %s",
+            "%s WINDOW_START pm_window=%dm closed_signal_open_ms=%s next_bar_open_ms=%s %s | %s",
             label,
+            window_minutes,
             closed_open_ms,
             next_open_ms,
             sig_part,
@@ -388,6 +390,7 @@ class ShamanV1Engine:
         label: str,
         interval: str,
         interval_ms: int,
+        window_minutes: int,
         rules: list[dict[str, Any]],
         watermark: int | None,
         pending: _Pending | None,
@@ -426,6 +429,7 @@ class ShamanV1Engine:
         new_pending = self._start_for_closed_signal_bar(
             label=label,
             interval_ms=interval_ms,
+            window_minutes=window_minutes,
             rules=rules,
             closed_open_ms=closed_open_ms,
             o=o,
@@ -444,6 +448,7 @@ class ShamanV1Engine:
                     label="5m",
                     interval="5m",
                     interval_ms=300_000,
+                    window_minutes=5,
                     rules=self._rules_5m,
                     watermark=self._watermark_5m,
                     pending=self._pending_5m,
@@ -452,6 +457,7 @@ class ShamanV1Engine:
                     label="15m",
                     interval="15m",
                     interval_ms=900_000,
+                    window_minutes=15,
                     rules=self._rules_15m,
                     watermark=self._watermark_15m,
                     pending=self._pending_15m,
