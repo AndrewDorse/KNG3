@@ -232,9 +232,11 @@ class BotConfig:
     paladin_v7_cheap_pair_avg_sum_nonforced_max: float = 0.96
     # Hedge cheap-gate uses opposite_mid + this buffer vs cap (FAK VWAP often > mid).
     paladin_v7_cheap_hedge_slip_buffer: float = 0.012
+    # Extra PM discount added to slip in cheap-hedge limit math (sim + live resting clamp).
+    paladin_v7_hedge_slip_addon_pm: float = 0.10
     # Seconds after first leg before a *cheap* hedge may execute (0 = immediate when gate passes).
     paladin_v7_cheap_hedge_min_delay_sec: float = 0.0
-    paladin_v7_hedge_timeout_seconds: float = 30.0
+    paladin_v7_hedge_timeout_seconds: float = 90.0
     paladin_v7_forced_hedge_max_book_sum: float = 1.30
     # Legacy layer-entry cooldown kept on config; spike-only mode no longer uses a non-spike layer path.
     paladin_v7_layer2_cooldown_sec: float = 5.0
@@ -251,8 +253,10 @@ class BotConfig:
     paladin_v7_layer_level_offset_step: float = 0.01
     # Legacy lower-VWAP deep-dip threshold kept on config; spike-only mode no longer uses it for entries.
     paladin_v7_layer2_low_vwap_dip_below_avg: float = 0.20
-    # Legacy layer cutoff kept on config; spike-only mode no longer uses a non-spike layer path.
+    # No new-risk entries in the last N seconds of the window (flat and balanced).
     paladin_v7_no_new_layers_last_seconds: float = 60.0
+    # Balanced PM-lead layer: lead mid must be <= that leg VWAP minus this (PM dollars; sweep best 0.10).
+    paladin_v7_balanced_layer_below_avg_pm: float = 0.10
     # |up−down| <= this (shares) counts as balanced for spike re-entry checks (default 1.0).
     paladin_v7_balance_share_tolerance: float = 1.0
     # Imbalance repair: buy lighter side when pm_light + VWAP(heavy) < this (default 0.97).
@@ -501,10 +505,13 @@ class BotConfig:
             paladin_v7_cheap_hedge_slip_buffer=max(
                 0.0, min(0.05, _env_float("BOT_PALADIN_V7_CHEAP_HEDGE_SLIP_BUFFER", 0.012))
             ),
+            paladin_v7_hedge_slip_addon_pm=max(
+                0.0, min(0.15, _env_float("BOT_PALADIN_V7_HEDGE_SLIP_ADDON_PM", 0.10))
+            ),
             paladin_v7_cheap_hedge_min_delay_sec=max(
                 0.0, _env_float("BOT_PALADIN_V7_CHEAP_HEDGE_MIN_DELAY_SEC", 0.0)
             ),
-            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 30.0)),
+            paladin_v7_hedge_timeout_seconds=max(1.0, _env_float("BOT_PALADIN_V7_HEDGE_TIMEOUT_SEC", 90.0)),
             paladin_v7_forced_hedge_max_book_sum=min(
                 1.50, max(1.0, _env_float("BOT_PALADIN_V7_FORCED_HEDGE_SUM_MAX", 1.30))
             ),
@@ -534,6 +541,9 @@ class BotConfig:
             ),
             paladin_v7_no_new_layers_last_seconds=max(
                 0.0, min(300.0, _env_float("BOT_PALADIN_V7_NO_NEW_LAYERS_LAST_SEC", 60.0))
+            ),
+            paladin_v7_balanced_layer_below_avg_pm=max(
+                0.0, min(0.25, _env_float("BOT_PALADIN_V7_BALANCED_LAYER_BELOW_AVG_PM", 0.10))
             ),
             paladin_v7_balance_share_tolerance=max(
                 0.0, min(50.0, _env_float("BOT_PALADIN_V7_BALANCE_SHARE_TOLERANCE", 1.0))

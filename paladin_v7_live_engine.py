@@ -71,6 +71,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         cheap_pair_sum_max=float(cfg.paladin_v7_cheap_pair_sum_max),
         cheap_pair_avg_sum_nonforced_max=float(cfg.paladin_v7_cheap_pair_avg_sum_nonforced_max),
         cheap_hedge_slip_buffer=float(cfg.paladin_v7_cheap_hedge_slip_buffer),
+        hedge_slip_addon_pm=float(cfg.paladin_v7_hedge_slip_addon_pm),
         cheap_hedge_min_delay_sec=float(cfg.paladin_v7_cheap_hedge_min_delay_sec),
         hedge_timeout_seconds=float(cfg.paladin_v7_hedge_timeout_seconds),
         forced_hedge_max_book_sum=float(cfg.paladin_v7_forced_hedge_max_book_sum),
@@ -79,6 +80,7 @@ def _v7_params_from_config(cfg: BotConfig) -> PaladinV7Params:
         layer_level_offset_step=float(cfg.paladin_v7_layer_level_offset_step),
         layer2_low_vwap_dip_below_avg=float(cfg.paladin_v7_layer2_low_vwap_dip_below_avg),
         no_new_layers_last_seconds=float(cfg.paladin_v7_no_new_layers_last_seconds),
+        balanced_layer_below_avg_pm=float(cfg.paladin_v7_balanced_layer_below_avg_pm),
         balance_share_tolerance=float(cfg.paladin_v7_balance_share_tolerance),
         imbalance_repair_max_pair_sum=float(cfg.paladin_v7_imbalance_repair_max_pair_sum),
         layer2_cooldown_sec=float(cfg.paladin_v7_layer2_cooldown_sec),
@@ -1629,7 +1631,9 @@ class PaladinV7LiveEngine:
             persistent_limit_until_ts: float | None = None
             persistent_cancel_at_elapsed: int | None = None
             mh = float(self.config.paladin_v7_cheap_pair_avg_sum_nonforced_max)
-            slip = float(self.config.paladin_v7_cheap_hedge_slip_buffer)
+            slip = float(self.config.paladin_v7_cheap_hedge_slip_buffer) + float(
+                self.config.paladin_v7_hedge_slip_addon_pm
+            )
             # First hedges from a one-sided book still use the held+opp pair-cost cap.
             # Once both sides exist, the strategy itself already gated on a better smaller-side price.
             if reason == "v7_hedge_cheap" and runner.pending_second is not None:

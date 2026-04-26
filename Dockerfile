@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing from kng_bot3 (labels only; COPY list below is the real contract).
 # Default live strategy: PALADIN v9 (BOT_STRATEGY_MODE unset -> paladin_v9; kernel still paladin_v7_step).
-ARG KNG3_IMAGE_TAG=2026-04-25-v7-pm-lead-7c-layer
+ARG KNG3_IMAGE_TAG=2026-04-26-v7-sweep-best-10c-ht90-stop60
 LABEL org.opencontainers.image.title="KNG3 PALADIN v9 (default)" \
       org.opencontainers.image.description="Docker image: paladin_v9 live unless BOT_STRATEGY_MODE=paladin_v7" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"

@@ -19,7 +19,7 @@ Each market second (`paladin_v7_step`): **(0) hedge** if `pending_second` or mat
 
 **When:** `pending_second` is set, or the book is materially imbalanced (gap sets `pending_second` for the lighter side).
 
-**Cheap / forced:** unchanged — cheap cap with slip, forced at `hedge_timeout_seconds`.
+**Cheap / forced:** cheap cap uses `cheap_hedge_slip_buffer + hedge_slip_addon_pm`; forced at `hedge_timeout_seconds` (default 90s live).
 
 ---
 
@@ -33,6 +33,8 @@ Each market second (`paladin_v7_step`): **(0) hedge** if `pending_second` or mat
 
 **Cooldown:** none on the first open from flat (no `pair_cooldown_sec` wait).
 
+**Tail:** same `no_new_layers_last_seconds` cutoff as layers — no flat first leg in the last N seconds of the window.
+
 **After fill:** `pending_second` on the opposite side.
 
 ---
@@ -41,9 +43,11 @@ Each market second (`paladin_v7_step`): **(0) hedge** if `pending_second` or mat
 
 **When:** Balanced, both-sided enough, not flat.
 
-**Cooldown / window:** `elapsed − last_completed_pair_elapsed ≥ max(pair_cooldown_sec, layer2_cooldown_sec)` (with mins 5s / 1s on those params). No new layers in the last `no_new_layers_last_seconds` of the window.
+**Cooldown / window:** `elapsed − last_completed_pair_elapsed ≥ max(pair_cooldown_sec, layer2_cooldown_sec)` (with mins 5s / 1s on those params). No **new risk** (flat or balanced) in the last `no_new_layers_last_seconds` of the window.
 
-**Dip:** Lead mid must satisfy `mid_lead ≤ avg_lead − 0.07` (7¢ under that leg’s held VWAP).
+**Dip:** Lead mid must satisfy `mid_lead ≤ avg_lead − balanced_layer_below_avg_pm` (default **10¢** under that leg’s held VWAP).
+
+**Cheap hedge:** limit math uses `cheap_hedge_slip_buffer + hedge_slip_addon_pm` as the slip term (default addon **10¢** live).
 
 **Band:** Lead mid in `[balanced_entry_min_pm, balanced_entry_max_pm]` (default 20¢–80¢) and `≤ first_leg_max_pm`.
 

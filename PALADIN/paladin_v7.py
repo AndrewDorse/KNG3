@@ -3,8 +3,8 @@
 PALADIN v7 (sim): PM-lead entries (no Binance spike gates), with the current balance-first hedge logic.
 
 1) **New risk**: when **flat**, open immediately on the Polymarket **lead** side (higher mid). When **balanced**
-   with both legs sized, add a layer only if the lead mid is at least **7¢** below that leg's held VWAP
-   (``mid_lead <= avg_lead - 0.07``), after ``pair_cooldown_sec`` / ``layer2_cooldown_sec`` (combined max),
+   with both legs sized, add a layer only if the lead mid is at least **balanced_layer_below_avg_pm** (default 10¢)
+   below that leg's held VWAP, after ``pair_cooldown_sec`` / ``layer2_cooldown_sec`` (combined max),
    outside ``no_new_layers_last_seconds`` of window end, and inside the balanced 20c..80c band plus
    ``first_leg_max_pm``. Reason strings stay ``v7_first_binance_spike`` / ``v7_balanced_btc_spike`` for logs.
 2) **Second leg / rebalance**: every material imbalance uses one ``pending_second`` path. Cheap first hedge still
@@ -66,14 +66,16 @@ class PaladinV7Params:
     # Live FAK often walks the book above the WS mid used for gating; require headroom so
     # avg_first + (mid_opposite + buffer) <= cheap cap (avoids approving hedges that fill >1 pair avg).
     cheap_hedge_slip_buffer: float = 0.012
+    # Extra PM discount (dollars) added to ``cheap_hedge_slip_buffer`` in cheap-hedge limit math only.
+    hedge_slip_addon_pm: float = 0.10
     # Do not allow ok_cheap until first-leg age >= this (seconds since first leg). 0 = legacy: hedge as soon
     # as the cheap gate passes. Forced hedge at hedge_timeout_seconds is unaffected.
     cheap_hedge_min_delay_sec: float = 0.0
-    hedge_timeout_seconds: float = 30.0
+    hedge_timeout_seconds: float = 90.0
     # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
-    # Legacy layer-entry threshold (unused in PM-lead + 7¢ layer build; kept for batch presets).
+    # Legacy layer-entry threshold (unused in PM-lead layer build; kept for batch presets).
     layer2_dip_below_avg: float = 0.05
     # Hedge-price cap starts at 1 - this deduction, then tightens by layer_level_offset_step per layer.
     cheap_balance_start_deduction: float = 0.08
@@ -81,8 +83,10 @@ class PaladinV7Params:
     layer_level_offset_step: float = 0.01
     # Legacy lower-VWAP deep-dip threshold (unused in this build).
     layer2_low_vwap_dip_below_avg: float = 0.20
-    # No balanced new-risk layers in the last N seconds of the replay window.
+    # No new-risk entries (flat or balanced) in the last N seconds of the replay window.
     no_new_layers_last_seconds: float = 60.0
+    # Balanced PM-lead layer: require lead mid <= that leg's VWAP minus this many PM dollars (live default 10¢).
+    balanced_layer_below_avg_pm: float = 0.10
     # Treat |up−down| <= this (shares) as balanced for balanced re-entry checks (default 1.0).
     balance_share_tolerance: float = 1.0
     # Imbalance: buy lighter side when pm_light + VWAP(heavy) < this (0.97 = 97¢ pair proxy vs heavy leg).
@@ -339,7 +343,7 @@ def paladin_v7_step(
         ok_cheap = False
         cheap_limit_px = 0.0
         if both_nonflat:
-            slip = max(0.0, float(p.cheap_hedge_slip_buffer))
+            slip = max(0.0, float(p.cheap_hedge_slip_buffer) + float(p.hedge_slip_addon_pm))
             hi_vwap = "up" if float(st.avg_up) >= float(st.avg_down) else "down"
             lo_vwap = "down" if hi_vwap == "up" else "up"
             opp_vwap = lo_vwap if side_o == hi_vwap else hi_vwap
@@ -348,7 +352,7 @@ def paladin_v7_step(
             cheap_limit_px = max(0.01, min(0.99, cap - float(avg_opp_vwap) - slip))
             ok_cheap = age + 1e-9 >= min_cheap_age
         else:
-            slip = max(0.0, float(p.cheap_hedge_slip_buffer))
+            slip = max(0.0, float(p.cheap_hedge_slip_buffer) + float(p.hedge_slip_addon_pm))
             cap = _nonforced_pair_cap(p)
             cheap_limit_px = max(0.01, min(0.99, cap - float(avg_first) - slip))
             ok_cheap = age + 1e-9 >= min_cheap_age
@@ -406,9 +410,12 @@ def paladin_v7_step(
     flat = su <= 1e-9 and sd <= 1e-9
     both = min(su, sd) + 1e-9 >= min_sz_gate
 
-    # --- PM-lead new risk: flat = immediate lead; balanced+both = lead mid ≤ own VWAP − 7¢ ---
+    # --- PM-lead new risk: flat = immediate lead; balanced+both = lead mid ≤ own VWAP − balanced_layer_below_avg_pm ---
     can_open = flat or (balanced and both)
     if not can_open:
+        return
+    stop_tail = max(0.0, float(p.no_new_layers_last_seconds))
+    if stop_tail > 1e-9 and float(t) + 1e-9 >= float(len(ticks)) - stop_tail:
         return
     pair_cd = max(5.0, float(p.pair_cooldown_sec))
     layer2_cd = max(1.0, float(p.layer2_cooldown_sec))
@@ -416,13 +423,12 @@ def paladin_v7_step(
         cd_need = max(pair_cd, layer2_cd)
         if float(t) - float(runner.last_completed_pair_elapsed) < cd_need - 1e-9:
             return
-        if float(t) + 1e-9 >= float(len(ticks)) - float(p.no_new_layers_last_seconds):
-            return
     mom = _lead_side(pm_u, pm_d)
     px_1 = pm_u if mom == "up" else pm_d
     if not flat:
         avg_lead = float(st.avg_up) if mom == "up" else float(st.avg_down)
-        if px_1 + 1e-9 > avg_lead - 0.07:
+        dip = max(0.0, float(p.balanced_layer_below_avg_pm))
+        if px_1 + 1e-9 > avg_lead - dip:
             return
     if (not flat) and (
         px_1 < float(p.balanced_entry_min_pm) - 1e-9
