@@ -142,8 +142,8 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # paladin | paladin_v7 | paladin_v9 | shaman_v1 | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
-    strategy_mode: str = "paladin_v9"
+    # SHAMAN-only entry (main.py): use shaman_v1. Other mode strings remain for config/imports elsewhere.
+    strategy_mode: str = "shaman_v1"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
     volume_scalp_stop_offset: float = 0.05
@@ -339,7 +339,7 @@ class BotConfig:
         else:
             perp15_ladder = [0.44, 0.43, 0.40]
 
-        raw_mode = _normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "paladin_v9"))
+        raw_mode = _normalize_strategy_mode(os.getenv("BOT_STRATEGY_MODE", "shaman_v1"))
         default_strategy_budget = (
             400.0
             if raw_mode == "paladin_v9"
