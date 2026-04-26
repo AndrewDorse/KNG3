@@ -161,27 +161,11 @@
   },
   {
     "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RGRGR|last=RSl",
-    "pred": "G",
-    "wr": 0.65714,
-    "n": 35
-  },
-  {
-    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "RRGR|last=RLh|rng=W",
     "pred": "G",
     "wr": 0.65714,
     "n": 35
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GGGR|last=RLl",
-    "pred": "G",
-    "wr": 0.65,
-    "n": 60
   },
   {
     "timeframe": "5m",
@@ -202,26 +186,10 @@
   {
     "timeframe": "5m",
     "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GRGR|last=RSl",
-    "pred": "G",
-    "wr": 0.64,
-    "n": 75
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
     "pattern_key": "RGR|last=RMh",
     "pred": "G",
     "wr": 0.63636,
     "n": 44
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RR|last=RSm",
-    "pred": "G",
-    "wr": 0.63492,
-    "n": 63
   },
   {
     "timeframe": "5m",
@@ -234,32 +202,8 @@
   {
     "timeframe": "5m",
     "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RGRG|last=GSl",
-    "pred": "G",
-    "wr": 0.62857,
-    "n": 70
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
     "pattern_key": "GGGRR|last=RLl",
     "pred": "R",
-    "wr": 0.62857,
-    "n": 35
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "RGRG|last=GLl|rng=W",
-    "pred": "G",
-    "wr": 0.62857,
-    "n": 35
-  },
-  {
-    "timeframe": "5m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "RGR|t-1=GMl|t=RSl",
-    "pred": "G",
     "wr": 0.62857,
     "n": 35
   },
@@ -278,14 +222,6 @@
     "pred": "G",
     "wr": 0.62791,
     "n": 43
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GGRGR|last=RSl",
-    "pred": "G",
-    "wr": 0.625,
-    "n": 40
   },
   {
     "timeframe": "5m",
@@ -322,50 +258,10 @@
   {
     "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
-    "pattern_key": "GGR|last=RLl|rng=W",
-    "pred": "G",
-    "wr": 0.62121,
-    "n": 66
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "RG|last=GMm|rng=w",
-    "pred": "R",
-    "wr": 0.61765,
-    "n": 34
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRR|last=RMl|rng=n",
-    "pred": "R",
-    "wr": 0.61538,
-    "n": 52
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
     "pattern_key": "GGRR|last=RLl|rng=W",
     "pred": "R",
     "wr": 0.61538,
     "n": 39
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RGGRG|last=GMl",
-    "pred": "R",
-    "wr": 0.61538,
-    "n": 39
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GGRG|last=GSl|rng=n",
-    "pred": "R",
-    "wr": 0.61404,
-    "n": 57
   },
   {
     "timeframe": "5m",
@@ -385,14 +281,6 @@
   },
   {
     "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GRGRR|last=RSl",
-    "pred": "G",
-    "wr": 0.6129,
-    "n": 31
-  },
-  {
-    "timeframe": "5m",
     "family": "C_rg_suffix_last2Tok",
     "pattern_key": "RG|t-1=RMl|t=GSl",
     "pred": "G",
@@ -406,14 +294,6 @@
     "pred": "G",
     "wr": 0.61111,
     "n": 72
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRGR|last=RSl|rng=n",
-    "pred": "G",
-    "wr": 0.61111,
-    "n": 54
   },
   {
     "timeframe": "5m",
@@ -449,30 +329,6 @@
   },
   {
     "timeframe": "5m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "RRR|t-1=RSl|t=RSl",
-    "pred": "R",
-    "wr": 0.61111,
-    "n": 36
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRG|last=GLl|rng=W",
-    "pred": "G",
-    "wr": 0.60938,
-    "n": 64
-  },
-  {
-    "timeframe": "5m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "GGG|t-1=GSl|t=GSl",
-    "pred": "R",
-    "wr": 0.6087,
-    "n": 46
-  },
-  {
-    "timeframe": "5m",
     "family": "B_rg_suffix_lastTok",
     "pattern_key": "RRRR|last=RLh",
     "pred": "G",
@@ -481,33 +337,9 @@
   },
   {
     "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRR|last=RLl|rng=W",
-    "pred": "R",
-    "wr": 0.60606,
-    "n": 66
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GG|last=GMh|rng=W",
-    "pred": "R",
-    "wr": 0.60606,
-    "n": 33
-  },
-  {
-    "timeframe": "5m",
     "family": "A_token_chain",
     "pattern_key": "GLl>RSl",
     "pred": "G",
-    "wr": 0.60606,
-    "n": 33
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GRGGG|last=GSl",
-    "pred": "R",
     "wr": 0.60606,
     "n": 33
   },
@@ -534,22 +366,6 @@
     "pred": "R",
     "wr": 0.60606,
     "n": 33
-  },
-  {
-    "timeframe": "5m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "GG|t-1=GSl|t=GLl",
-    "pred": "G",
-    "wr": 0.60465,
-    "n": 43
-  },
-  {
-    "timeframe": "5m",
-    "family": "A_token_chain",
-    "pattern_key": "GSl>GLl",
-    "pred": "G",
-    "wr": 0.60465,
-    "n": 43
   },
   {
     "timeframe": "5m",
@@ -658,23 +474,7 @@
   {
     "timeframe": "15m",
     "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRGG|last=GSl|rng=n",
-    "pred": "R",
-    "wr": 0.64865,
-    "n": 37
-  },
-  {
-    "timeframe": "15m",
-    "family": "D_rg_rng_lastTok",
     "pattern_key": "GRG|last=GLl|rng=w",
-    "pred": "R",
-    "wr": 0.64865,
-    "n": 37
-  },
-  {
-    "timeframe": "15m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RGRG|last=GLl",
     "pred": "R",
     "wr": 0.64865,
     "n": 37
@@ -697,35 +497,11 @@
   },
   {
     "timeframe": "15m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "GR|t-1=GSl|t=RMl",
-    "pred": "G",
-    "wr": 0.6383,
-    "n": 47
-  },
-  {
-    "timeframe": "15m",
-    "family": "A_token_chain",
-    "pattern_key": "GSl>RMl",
-    "pred": "G",
-    "wr": 0.6383,
-    "n": 47
-  },
-  {
-    "timeframe": "15m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "RGR|last=RSl|rng=n",
     "pred": "G",
     "wr": 0.63793,
     "n": 58
-  },
-  {
-    "timeframe": "15m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRGR|last=RSl|rng=n",
-    "pred": "G",
-    "wr": 0.63333,
-    "n": 30
   },
   {
     "timeframe": "15m",
@@ -785,22 +561,6 @@
   },
   {
     "timeframe": "15m",
-    "family": "A_token_chain",
-    "pattern_key": "RLh>RLh",
-    "pred": "G",
-    "wr": 0.62162,
-    "n": 37
-  },
-  {
-    "timeframe": "15m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "RR|t-1=RLh|t=RLh",
-    "pred": "G",
-    "wr": 0.62162,
-    "n": 37
-  },
-  {
-    "timeframe": "15m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "RR|last=RLh|rng=W",
     "pred": "G",
@@ -814,14 +574,6 @@
     "pred": "G",
     "wr": 0.62,
     "n": 50
-  },
-  {
-    "timeframe": "15m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "RGG|last=GMl|rng=w",
-    "pred": "R",
-    "wr": 0.61905,
-    "n": 42
   },
   {
     "timeframe": "15m",
@@ -866,14 +618,6 @@
   {
     "timeframe": "15m",
     "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RR|last=RSm",
-    "pred": "G",
-    "wr": 0.61111,
-    "n": 36
-  },
-  {
-    "timeframe": "15m",
-    "family": "B_rg_suffix_lastTok",
     "pattern_key": "GGRG|last=GMl",
     "pred": "G",
     "wr": 0.6087,
@@ -889,34 +633,370 @@
   },
   {
     "timeframe": "15m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GRGGR|last=RSl",
+    "pred": "R",
+    "wr": 0.78125,
+    "n": 32
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGGRR|last=RSl",
+    "pred": "R",
+    "wr": 0.76316,
+    "n": 38
+  },
+  {
+    "timeframe": "15m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GRG|t-1=RMl|t=GLl",
+    "pred": "R",
+    "wr": 0.74194,
+    "n": 31
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGG|last=GLl",
+    "pred": "R",
+    "wr": 0.73171,
+    "n": 41
+  },
+  {
+    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
-    "pattern_key": "GRG|last=GLh|rng=W",
+    "pattern_key": "GRRR|last=RLl|rng=W",
     "pred": "G",
-    "wr": 0.60526,
+    "wr": 0.72549,
+    "n": 51
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GRGR|t-1=GLl|t=RMl",
+    "pred": "R",
+    "wr": 0.72222,
+    "n": 36
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGRRR|last=RMl|rng=w",
+    "pred": "G",
+    "wr": 0.71875,
+    "n": 32
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RGGRGR|last=RMl",
+    "pred": "R",
+    "wr": 0.71739,
+    "n": 46
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "RR|last=RMh|rng=W",
+    "pred": "G",
+    "wr": 0.71698,
+    "n": 53
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "RRR|last=RMh|rng=W",
+    "pred": "G",
+    "wr": 0.71053,
     "n": 38
   },
   {
     "timeframe": "15m",
     "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GRGR|last=RSl",
+    "pattern_key": "GRG|last=GSh",
     "pred": "G",
-    "wr": 0.60465,
-    "n": 43
+    "wr": 0.70455,
+    "n": 44
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGGRR|last=RLl|rng=W",
+    "pred": "R",
+    "wr": 0.7027,
+    "n": 37
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GGRG|t-1=RSl|t=GSl",
+    "pred": "R",
+    "wr": 0.7027,
+    "n": 37
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GRRR|last=RMm",
+    "pred": "G",
+    "wr": 0.7027,
+    "n": 37
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "RRR|last=RSm|rng=n",
+    "pred": "G",
+    "wr": 0.7027,
+    "n": 37
   },
   {
     "timeframe": "15m",
     "family": "D_rg_rng_lastTok",
-    "pattern_key": "RGG|last=GSl|rng=n",
-    "pred": "R",
-    "wr": 0.60317,
-    "n": 63
+    "pattern_key": "RRRR|last=RLh|rng=W",
+    "pred": "G",
+    "wr": 0.70175,
+    "n": 57
   },
   {
-    "timeframe": "15m",
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RRRGR|last=RMh",
+    "pred": "G",
+    "wr": 0.84615,
+    "n": 26
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGRRR|last=RLl",
+    "pred": "G",
+    "wr": 0.77778,
+    "n": 27
+  },
+  {
+    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
-    "pattern_key": "GG|last=GSl|rng=n",
+    "pattern_key": "RGGGG|last=GMl|rng=w",
     "pred": "R",
-    "wr": 0.60185,
-    "n": 108
+    "wr": 0.76,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "RRR|t-1=RLl|t=RLl",
+    "pred": "G",
+    "wr": 0.76,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GRRR|t-1=RLh|t=RLh",
+    "pred": "G",
+    "wr": 0.74074,
+    "n": 27
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RRRRR|last=RSh",
+    "pred": "G",
+    "wr": 0.73077,
+    "n": 26
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GG|t-1=GMl|t=GLm",
+    "pred": "R",
+    "wr": 0.72414,
+    "n": 29
+  },
+  {
+    "timeframe": "5m",
+    "family": "A_token_chain",
+    "pattern_key": "GMl>GLm",
+    "pred": "R",
+    "wr": 0.72414,
+    "n": 29
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GG|t-1=GSh|t=GMh",
+    "pred": "G",
+    "wr": 0.72,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GRRG|last=GSh|rng=w",
+    "pred": "G",
+    "wr": 0.72,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "A_token_chain",
+    "pattern_key": "GSh>GMh",
+    "pred": "G",
+    "wr": 0.72,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "RGGRG|last=GMl|rng=n",
+    "pred": "R",
+    "wr": 0.72,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGGGR|last=RMl|rng=n",
+    "pred": "R",
+    "wr": 0.71429,
+    "n": 28
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGRRR|last=RLl|rng=W",
+    "pred": "G",
+    "wr": 0.71429,
+    "n": 28
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGGRR|last=RLl",
+    "pred": "R",
+    "wr": 0.7037,
+    "n": 27
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GGR|t-1=GLh|t=RMl",
+    "pred": "R",
+    "wr": 0.7037,
+    "n": 27
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RRRRGG|last=GMl",
+    "pred": "R",
+    "wr": 0.69697,
+    "n": 33
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "RR|t-1=RSl|t=RSh",
+    "pred": "G",
+    "wr": 0.69444,
+    "n": 36
+  },
+  {
+    "timeframe": "5m",
+    "family": "A_token_chain",
+    "pattern_key": "RSl>RSh",
+    "pred": "G",
+    "wr": 0.69444,
+    "n": 36
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGGRR|last=RSl|rng=n",
+    "pred": "R",
+    "wr": 0.69388,
+    "n": 49
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RRRGGR|last=RLl",
+    "pred": "G",
+    "wr": 0.69231,
+    "n": 39
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGG|last=GLm",
+    "pred": "R",
+    "wr": 0.69231,
+    "n": 26
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "RRGR|last=RMh",
+    "pred": "G",
+    "wr": 0.69048,
+    "n": 42
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGGRR|last=RMl",
+    "pred": "R",
+    "wr": 0.68966,
+    "n": 29
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGGRRRG|last=GSl",
+    "pred": "G",
+    "wr": 0.68966,
+    "n": 29
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGRRR|last=RLl",
+    "pred": "G",
+    "wr": 0.6875,
+    "n": 48
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "RGR|last=RLm|rng=W",
+    "pred": "G",
+    "wr": 0.68182,
+    "n": 44
+  },
+  {
+    "timeframe": "5m",
+    "family": "B_rg_suffix_lastTok",
+    "pattern_key": "GGRRR|last=RLh",
+    "pred": "G",
+    "wr": 0.68085,
+    "n": 47
+  },
+  {
+    "timeframe": "5m",
+    "family": "D_rg_rng_lastTok",
+    "pattern_key": "GGGGR|last=RMl|rng=w",
+    "pred": "G",
+    "wr": 0.68,
+    "n": 25
+  },
+  {
+    "timeframe": "5m",
+    "family": "C_rg_suffix_last2Tok",
+    "pattern_key": "GGGR|t-1=GSl|t=RSl",
+    "pred": "G",
+    "wr": 0.68,
+    "n": 25
   }
 ]
