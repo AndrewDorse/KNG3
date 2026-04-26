@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KNG3 Docker entry: PALADIN v9 live (default); paladin_v7 optional. No top-level btc15 imports."""
+"""KNG3 Docker entry: PALADIN v9/v7 (default product) or SHAMAN v1. No top-level btc15 imports."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def main() -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
 
-    allowed = ("paladin_v7", "paladin_v9")
+    allowed = ("paladin_v7", "paladin_v9", "shaman_v1")
     if config.strategy_mode not in allowed:
         print(
             f"KNG3 Docker: BOT_STRATEGY_MODE must be one of {allowed} "
@@ -28,6 +28,32 @@ def main() -> int:
         return 2
 
     configure_logging(config.log_level)
+
+    locator = GammaMarketLocator(config)
+    trader = PolymarketTrader(config)
+
+    if config.strategy_mode == "shaman_v1":
+        from shaman_v1_engine import ShamanV1Engine  # noqa: PLC0415
+
+        LOGGER.info("=" * 60)
+        LOGGER.info("KNG3 | SHAMAN v1 | Binance 5m/15m close -> Polymarket UP/DOWN")
+        LOGGER.info("=" * 60)
+        LOGGER.info("version      = %s", config.bot_version)
+        LOGGER.info("dry_run      = %s", config.dry_run)
+        LOGGER.info("strategy_mode= %s", config.strategy_mode)
+        LOGGER.info("btc_symbol   = %s", config.btc_feed_symbol)
+        LOGGER.info("market       = %s", config.market_slug_prefix)
+        LOGGER.info("new cutoff   = %ds before PM window end", config.strategy_new_order_cutoff_seconds)
+        LOGGER.info("poll         = %.1fs", config.poll_interval_seconds)
+        LOGGER.info("=" * 60)
+        if config.dry_run:
+            LOGGER.warning("SHAMAN v1: POLY_DRY_RUN=true — paper only (no CLOB orders).")
+        else:
+            LOGGER.warning(
+                "SHAMAN v1: LIVE — FAK buys on Binance 5m/15m candle close. Ctrl+C stops the loop."
+            )
+        ShamanV1Engine(config, locator, trader).run()
+        return 0
 
     LOGGER.info("=" * 60)
     LOGGER.info("KNG3 | BTC 15m | PALADIN v9 product (kernel=paladin_v7_step)")
@@ -82,9 +108,6 @@ def main() -> int:
     LOGGER.info("poll         = %.1fs", config.poll_interval_seconds)
     LOGGER.info("continuous   = %s", not config.trade_one_window)
     LOGGER.info("=" * 60)
-
-    locator = GammaMarketLocator(config)
-    trader = PolymarketTrader(config)
 
     if config.strategy_mode == "paladin_v9":
         from paladin_v9_live_engine import PaladinV9LiveEngine  # noqa: PLC0415

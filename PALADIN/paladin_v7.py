@@ -96,6 +96,8 @@ class PaladinV7Params:
     layer2_cooldown_sec: float = 5.0
     # Seconds after a completed pair before balanced re-entry (flat opens ignore this).
     pair_cooldown_sec: float = 5.0
+    # Optional extra gate for **balanced layers only** (``none`` = off). See ``_balanced_layer_extra_gate_ok``.
+    balanced_layer_gate_profile: str = "none"
 
 
 @dataclass(slots=True)
@@ -220,6 +222,89 @@ def _lead_side(pm_u: float, pm_d: float) -> Side:
     if pm_d > pm_u + 1e-12:
         return "down"
     return "up"
+
+
+def _balanced_layer_extra_gate_ok(
+    *,
+    profile: str,
+    ticks: list[WindowTick],
+    t: int,
+    st: SimState,
+    pm_u: float,
+    pm_d: float,
+    mom: Side,
+) -> bool:
+    """
+    Extra conditions for **balanced PM-lead layers only** (not used for flat first legs).
+
+    Profiles are experiment ids; unknown ids are treated as ``none`` (allow).
+    """
+    pid = (profile or "none").strip().lower()
+    if pid in ("none", "", "baseline"):
+        return True
+
+    su, sd = float(st.size_up), float(st.size_down)
+    spr = abs(float(pm_u) - float(pm_d))
+    btc_now = float(ticks[t].btc_px)
+    lo = max(0, t - 30)
+
+    if pid == "spread_min_2c":
+        # Start layer only when PM shows ≥2¢ favorite spread (conviction).
+        return spr + 1e-9 >= 0.02
+    if pid == "spread_max_8c":
+        # Start layer only when spread is not a blowout (≤8¢).
+        return spr <= 0.08 + 1e-9
+    if pid == "btc_move_30s_5usd":
+        # Start layer only after ≥$5 BTC move over the last 30s.
+        if btc_now <= 0.0:
+            return False
+        b0 = float(ticks[lo].btc_px)
+        if b0 <= 0.0:
+            return False
+        return abs(btc_now - b0) + 1e-9 >= 5.0
+    if pid == "block_btc_chop":
+        # Do not layer when 1s BTC move is tiny AND PM spread is tight (chop).
+        if t <= 0 or btc_now <= 0.0:
+            return True
+        b1 = float(ticks[t - 1].btc_px)
+        if b1 <= 0.0:
+            return True
+        if abs(btc_now - b1) < 2.0 and spr < 0.03:
+            return False
+        return True
+    if pid == "lead_mid_ge_0_48":
+        # Start layer only when lead mid is at least 48¢ (favorite not cheap).
+        px_lead = float(pm_u) if mom == "up" else float(pm_d)
+        return px_lead + 1e-9 >= 0.48
+    if pid == "block_wide_pm_book":
+        # Do not layer when summed mids imply a very wide synthetic book.
+        return float(pm_u) + float(pm_d) <= 1.02 + 1e-9
+    if pid == "symmetry_85":
+        # Start layer only when share sizes are fairly symmetric (≥85% of larger leg).
+        mx = max(su, sd)
+        if mx <= 1e-9:
+            return False
+        return min(su, sd) + 1e-9 >= 0.85 * mx
+    if pid == "underdog_mid_ge_0_38":
+        # Start layer only when the underdog mid is still ≥38¢ (two-sided liquidity).
+        dog = float(pm_d) if mom == "up" else float(pm_u)
+        return dog + 1e-9 >= 0.38
+    if pid == "layer_only_elapsed_lt_720":
+        # Do not start new balanced layers in the last 3 minutes of the 15m window (elapsed ≥ 720).
+        return float(t) < 720.0
+    if pid == "btc_vol_ratio_30s_1p3":
+        # Start layer only when this second's BTC vol exceeds 1.3× mean vol over the prior 30s.
+        v_now = max(0.0, float(ticks[t].btc_vol))
+        if t <= 0:
+            return True
+        s = 0.0
+        for i in range(lo, t):
+            s += max(0.0, float(ticks[i].btc_vol))
+        n = t - lo
+        mean = s / max(1, n)
+        return v_now + 1e-12 >= 1.3 * max(1e-12, mean)
+
+    return True
 
 
 def _higher_vwap_side(st: SimState, pm_u: float, pm_d: float) -> Side:
@@ -436,6 +521,16 @@ def paladin_v7_step(
     ):
         return
     if px_1 + 1e-9 > float(p.first_leg_max_pm):
+        return
+    if not flat and not _balanced_layer_extra_gate_ok(
+        profile=str(p.balanced_layer_gate_profile),
+        ticks=ticks,
+        t=t,
+        st=st,
+        pm_u=pm_u,
+        pm_d=pm_d,
+        mom=mom,
+    ):
         return
     sh1 = _entry_shares(
         st,

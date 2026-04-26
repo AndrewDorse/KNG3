@@ -77,6 +77,8 @@ def _normalize_strategy_mode(raw: str | None) -> str:
         return "paladin_v7"
     if s in ("paladin_v9", "paladin9", "paladin_v9_live", "kng3_v9", "v9_live"):
         return "paladin_v9"
+    if s in ("shaman_v1", "shaman1", "shaman"):
+        return "shaman_v1"
     if s in ("iy2", "iy_2", "wallet_overlap", "wallet_overlap_live", "iy2_live"):
         return "iy2"
     if s in ("iy3", "iy_3", "wallet_overlap_path", "wallet_overlap_path_live", "iy3_live"):
@@ -140,7 +142,7 @@ class BotConfig:
     btc_feed_poll_seconds: float = 1.0
     btc_feed_symbol: str = "BTCUSDT"
     signal_preset: str = "w1"
-    # paladin | paladin_v7 | paladin_v9 | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
+    # paladin | paladin_v7 | paladin_v9 | shaman_v1 | champ4_6s | iy2 | strategy_0 | aa1 | mimic_lot | box_balance | signal_only | wd | volume_t10 | volume_t10_hybrid | volume_scalp_up | btc_perp15
     strategy_mode: str = "paladin_v9"
     # volume scalp: fixed-lot directional entries with one shared TP per held side plus stop/time-exit risk control.
     volume_scalp_tp_offset: float = 0.12
@@ -276,6 +278,15 @@ class BotConfig:
     paladin_v7_reconcile_flatten: bool = True
     paladin_v7_reconcile_flatten_min_imbalance: float = 0.25
     paladin_v7_reconcile_flatten_cooldown_seconds: float = 10.0
+    # SHAMAN v1: Binance 5m/15m candle-close pattern rules -> Polymarket UP/DOWN FAK
+    shaman_v1_rules_path: str = ""
+    shaman_v1_kline_limit: int = 500
+    shaman_v1_price_pad: float = 0.03
+    shaman_v1_notional_base_usdc: float = 3.0
+    shaman_v1_notional_per_extra_signal_usdc: float = 1.0
+    shaman_v1_notional_max_usdc: float = 6.0
+    shaman_v1_min_shares: int = 1
+    shaman_v1_min_notional_usdc: float = 1.0
 
     @property
     def window_size_seconds(self) -> int:
@@ -332,7 +343,11 @@ class BotConfig:
         default_strategy_budget = (
             400.0
             if raw_mode == "paladin_v9"
-            else (10.0 if raw_mode == "paladin_v7" else 80.0)
+            else (
+                10.0
+                if raw_mode == "paladin_v7"
+                else (30.0 if raw_mode == "shaman_v1" else 80.0)
+            )
         )
 
         cfg = cls(
@@ -577,6 +592,16 @@ class BotConfig:
             paladin_v7_reconcile_flatten_cooldown_seconds=max(
                 2.0, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_COOLDOWN_SEC", 10.0)
             ),
+            shaman_v1_rules_path=os.getenv("BOT_SHAMAN_V1_RULES_PATH", "").strip(),
+            shaman_v1_kline_limit=max(120, _env_int("BOT_SHAMAN_V1_KLINE_LIMIT", 500)),
+            shaman_v1_price_pad=max(0.0, _env_float("BOT_SHAMAN_V1_PRICE_PAD", 0.03)),
+            shaman_v1_notional_base_usdc=max(1.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_BASE", 3.0)),
+            shaman_v1_notional_per_extra_signal_usdc=max(
+                0.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_PER_EXTRA", 1.0)
+            ),
+            shaman_v1_notional_max_usdc=max(3.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_MAX", 6.0)),
+            shaman_v1_min_shares=max(1, _env_int("BOT_SHAMAN_V1_MIN_SHARES", 1)),
+            shaman_v1_min_notional_usdc=max(0.5, _env_float("BOT_SHAMAN_V1_MIN_NOTIONAL_USDC", 1.0)),
         )
         if cfg.strategy_mode in ("paladin_v7", "paladin_v9") and (
             cfg.strategy_budget_cap_usdc + 1e-9 < cfg.strategy_min_budget_usdc

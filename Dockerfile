@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 # Bump when syncing from kng_bot3 (labels only; COPY list below is the real contract).
 # Default live strategy: PALADIN v9 (BOT_STRATEGY_MODE unset -> paladin_v9; kernel still paladin_v7_step).
-ARG KNG3_IMAGE_TAG=2026-04-26-v7-sweep-best-10c-ht90-stop60
-LABEL org.opencontainers.image.title="KNG3 PALADIN v9 (default)" \
-      org.opencontainers.image.description="Docker image: paladin_v9 live unless BOT_STRATEGY_MODE=paladin_v7" \
+# Optional: BOT_STRATEGY_MODE=shaman_v1 (Binance 5m/15m candle-close rules -> PM FAK).
+ARG KNG3_IMAGE_TAG=2026-04-25-shaman-v1-docker
+LABEL org.opencontainers.image.title="KNG3 PALADIN v9 + SHAMAN v1" \
+      org.opencontainers.image.description="Docker: paladin_v9 (default) | paladin_v7 | shaman_v1" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,6 +33,7 @@ COPY clob_fak.py /app/clob_fak.py
 COPY polymarket_ws.py /app/polymarket_ws.py
 COPY paladin_v7_live_engine.py /app/paladin_v7_live_engine.py
 COPY paladin_v9_live_engine.py /app/paladin_v9_live_engine.py
+COPY shaman_v1_engine.py /app/shaman_v1_engine.py
 COPY btc15_redeem_engine.py /app/btc15_redeem_engine.py
 COPY paladin_live_engine.py /app/paladin_live_engine.py
 COPY signal_analyzer.py /app/signal_analyzer.py
@@ -42,6 +44,8 @@ COPY PALADIN/paladin_v7.py /app/PALADIN/paladin_v7.py
 COPY PALADIN/simulate_paladin_window.py /app/PALADIN/simulate_paladin_window.py
 COPY PALADIN/paladin_sim_config.json /app/PALADIN/paladin_sim_config.json
 COPY PALADIN/V7_ENTRY_RULES.md /app/PALADIN/V7_ENTRY_RULES.md
+COPY PALADIN/shaman_v1_eval.py /app/PALADIN/shaman_v1_eval.py
+COPY PALADIN/shaman_v1_rules.json /app/PALADIN/shaman_v1_rules.json
 
 RUN mkdir -p /app/logs /app/exports && \
     chown -R appuser:appuser /app
