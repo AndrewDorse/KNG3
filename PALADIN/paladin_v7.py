@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-PALADIN v7 (sim): BTC-spike entries only, with the current balance-first hedge logic.
+PALADIN v7 (sim): PM-lead entries (no Binance spike gates), with the current balance-first hedge logic.
 
-1) **New risk** opens only on BTC volume spike + price jump. This applies when flat and also when an
-   existing book is already balanced. Side = BTC momentum direction, subject to ``first_leg_max_pm``,
-   base-order share sizing, and the normal pair cooldown when re-entering from a balanced book.
-   Balanced re-entry clips are additionally ignored unless the buy price is inside the configured
-   20c..80c band.
+1) **New risk**: when **flat**, open immediately on the Polymarket **lead** side (higher mid). When **balanced**
+   with both legs sized, add a layer only if the lead mid is at least **7¢** below that leg's held VWAP
+   (``mid_lead <= avg_lead - 0.07``), after ``pair_cooldown_sec`` / ``layer2_cooldown_sec`` (combined max),
+   outside ``no_new_layers_last_seconds`` of window end, and inside the balanced 20c..80c band plus
+   ``first_leg_max_pm``. Reason strings stay ``v7_first_binance_spike`` / ``v7_balanced_btc_spike`` for logs.
 2) **Second leg / rebalance**: every material imbalance uses one ``pending_second`` path. Cheap first hedge still
    uses ``opened_avg + opposite_px + slip <= _nonforced_pair_cap()``. Cheap re-balance after later entries uses the
    avg of the *opposite VWAP side* plus the current price of the side being bought, plus slip. That means
    ``avg_higher_vwap + current_lower_vwap_px + slip`` when buying the lower-VWAP side, and
    ``avg_lower_vwap + current_higher_vwap_px + slip`` when buying the higher-VWAP side. Forced balance still fires
    after ``hedge_timeout_seconds``.
-3) The old ``-5c`` / ``-20c`` layer-entry paths are disabled. New risk comes from BTC spikes only.
+3) Legacy ``-5c`` / ``-20c`` VWAP dip ladders and Binance spike gates are not used for new risk in this build.
 
 Uses ``SimState`` / ``try_buy`` from the PALADIN window harness.
 """
@@ -73,24 +73,24 @@ class PaladinV7Params:
     # Not used to block timed forced hedges (see ``paladin_v7_step``); kept for dashboards / future tuning.
     forced_hedge_max_book_sum: float = 1.30
 
-    # Legacy layer-entry threshold kept on params, but spike-only mode no longer uses it.
+    # Legacy layer-entry threshold (unused in PM-lead + 7¢ layer build; kept for batch presets).
     layer2_dip_below_avg: float = 0.05
     # Hedge-price cap starts at 1 - this deduction, then tightens by layer_level_offset_step per layer.
     cheap_balance_start_deduction: float = 0.08
-    # Legacy layer tightening knob kept on params; spike-only mode no longer uses it for entries.
+    # Legacy layer tightening knob (unused for entries in this build).
     layer_level_offset_step: float = 0.01
-    # Legacy lower-VWAP deep-dip threshold kept on params, but spike-only mode no longer uses it.
+    # Legacy lower-VWAP deep-dip threshold (unused in this build).
     layer2_low_vwap_dip_below_avg: float = 0.20
-    # Legacy layer cutoff kept on params; spike-only mode has no non-spike layer-entry path.
+    # No balanced new-risk layers in the last N seconds of the replay window.
     no_new_layers_last_seconds: float = 60.0
-    # Treat |up−down| <= this (shares) as balanced for spike re-entry checks (default 1.0).
+    # Treat |up−down| <= this (shares) as balanced for balanced re-entry checks (default 1.0).
     balance_share_tolerance: float = 1.0
     # Imbalance: buy lighter side when pm_light + VWAP(heavy) < this (0.97 = 97¢ pair proxy vs heavy leg).
     imbalance_repair_max_pair_sum: float = 0.97
 
-    # Seconds after a completed pair before the next layer‑2 *add* may fire (default 1; min 1 replay second).
+    # Seconds after a completed pair before the next balanced layer add (min 1 replay second).
     layer2_cooldown_sec: float = 5.0
-    # Legacy cooldown knob kept on the params object; spike-based re-entry is disabled in the strategy.
+    # Seconds after a completed pair before balanced re-entry (flat opens ignore this).
     pair_cooldown_sec: float = 5.0
 
 
@@ -406,19 +406,24 @@ def paladin_v7_step(
     flat = su <= 1e-9 and sd <= 1e-9
     both = min(su, sd) + 1e-9 >= min_sz_gate
 
-    # --- Spike-only new risk: flat start or balanced re-entry ---
+    # --- PM-lead new risk: flat = immediate lead; balanced+both = lead mid ≤ own VWAP − 7¢ ---
     can_open = flat or (balanced and both)
     if not can_open:
         return
     pair_cd = max(5.0, float(p.pair_cooldown_sec))
-    if float(t) - float(runner.last_completed_pair_elapsed) < pair_cd and not flat:
-        return
-    if not (_volume_spike(ticks, t, p) and _price_jump(ticks, t, p)):
-        return
-    mom = _btc_momentum_side(ticks, t)
-    if mom is None:
-        return
+    layer2_cd = max(1.0, float(p.layer2_cooldown_sec))
+    if not flat:
+        cd_need = max(pair_cd, layer2_cd)
+        if float(t) - float(runner.last_completed_pair_elapsed) < cd_need - 1e-9:
+            return
+        if float(t) + 1e-9 >= float(len(ticks)) - float(p.no_new_layers_last_seconds):
+            return
+    mom = _lead_side(pm_u, pm_d)
     px_1 = pm_u if mom == "up" else pm_d
+    if not flat:
+        avg_lead = float(st.avg_up) if mom == "up" else float(st.avg_down)
+        if px_1 + 1e-9 > avg_lead - 0.07:
+            return
     if (not flat) and (
         px_1 < float(p.balanced_entry_min_pm) - 1e-9
         or px_1 > float(p.balanced_entry_max_pm) + 1e-9

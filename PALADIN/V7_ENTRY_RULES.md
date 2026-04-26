@@ -1,6 +1,6 @@
 # Paladin v7 — when we buy (first legs & layers)
 
-Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pair is open → **(1) first-window lead if flat** → **(2) imbalance repair** → **(3) layer dips** → **(4) Binance spike first leg**. At most one “new risk” path that sets `pending_second` runs per second (hedge can fill partially across seconds).
+Each market second (`paladin_v7_step`): **(0) hedge** if `pending_second` or material skew → **(1) PM-lead new risk** when flat or when balanced with both legs. There is no separate first-window, VWAP dip ladder, or Binance spike gate in this build.
 
 ---
 
@@ -8,95 +8,52 @@ Order of work **each market second** (`paladin_v7_step`): **(0) hedge** if a pai
 
 - **Flat**: no UP and no DOWN inventory.
 - **Balanced**: `|size_up − size_down| ≤ balance_share_tolerance` (default 1 share).
-- **Both-sided enough for layers**: `min(size_up, size_down) ≥ max(0, min_shares − balance_share_tolerance)` (e.g. 4.5 vs 5.5 with min_shares 5 and tol 1).
-- **Clip size**: normal new-risk buys use the fixed `base_order_shares` clip (currently 5). Larger hedge needs are worked one clip at a time; only a small leftover cleanup hedge may be smaller.
-- **Live execution**: v7 buy orders are live **limit buys** placed at the chosen target price and canceled after `paladin_v7_limit_order_cancel_seconds` (default 5s).
+- **Both-sided enough for layers**: `min(size_up, size_down) ≥ max(0, min_shares − balance_share_tolerance)`.
+- **Lead side**: higher Polymarket mid (`_lead_side`; tie → up).
+- **Clip size**: new-risk buys use `base_order_shares` (e.g. 5). Hedges use the same pending-second path as before.
+- **Live execution**: v7 buys are limit orders at the target price, canceled after `paladin_v7_limit_order_cancel_seconds`.
 
 ---
 
 ## 0) Pending hedge (second leg) — always first
 
-**When:** `pending_second` is set (after any first leg below).
+**When:** `pending_second` is set, or the book is materially imbalanced (gap sets `pending_second` for the lighter side).
 
-**Side / size:** Opposite side; `sh_need` = first-leg filled shares (can shrink on partial hedge fills).
-
-**Cheap hedge (`v7_hedge_cheap`):**  
-Age since first leg `t0` ≥ `cheap_hedge_min_delay_sec` **and**  
-`avg_first + opposite_mid + cheap_hedge_slip_buffer ≤` non‑forced cap (`cheap_pair_*` / `_nonforced_pair_cap`).
-
-**Forced hedge (`v7_hedge_forced`):**  
-Age ≥ `hedge_timeout_seconds` (default 90s).  
-*(Older builds also required `pm_u + pm_d` — sum of both outcome mids — to be ≤ `forced_hedge_max_book_sum`; that could block every forced hedge when the book was “tight” in the wrong way. Current code does **not** use that sum as a gate; only the timeout matters.)*
-
-**Label:** If both cheap and forced are true, cheap wins for the `reason` string.
-
-**Live note:** After API reconcile, `pending_second` may be rebuilt from inventory; the hedge **age clock `t0` is preserved** when the same hedge side is rebuilt so forced can actually fire.
+**Cheap / forced:** unchanged — cheap cap with slip, forced at `hedge_timeout_seconds`.
 
 ---
 
-## 1) First-window lead (`v7_first_window_lead`)
+## 1) PM-lead new risk — flat (`v7_first_binance_spike`)
 
-**When:** Flat inventory.
+**When:** Flat.
 
-**Buy:** The side with the **higher Polymarket mid** right now (`_lead_side`).
+**Side / price:** Lead side; buy at that side’s mid.
 
-**Size:** fixed `base_order_shares` clip.
+**Gates:** `mid ≤ first_leg_max_pm`; clip clears `min_notional` / room under `max_shares_per_side`.
 
-**After fill:** Set `pending_second` for the opposite hedge. No BTC spike is required.
+**Cooldown:** none on the first open from flat (no `pair_cooldown_sec` wait).
 
----
-
-## 2) Imbalance repair (not a paired first leg)
-
-**When:** Not flat, not balanced (`|Δ| > tolerance`), and no `pending_second` block ran this second.
-
-**Buy:** Lighter side, up to one `base_order_shares` clip, if `pm_light + avg(heavy) < imbalance_repair_max_pair_sum` (default 0.97).
-
-**Reason:** `v7_imbalance_repair`. Does **not** set `pending_second`.
+**After fill:** `pending_second` on the opposite side.
 
 ---
 
-## 3) Extra layers (only if balanced + both-sided + cooldown)
+## 2) PM-lead layer — balanced + both legs (`v7_balanced_btc_spike`)
 
-**When:** Balanced, both-sided enough, and `elapsed − last_completed_pair_elapsed ≥ layer2_cooldown_sec` (min 1s).
+**When:** Balanced, both-sided enough, not flat.
 
-**Try in order (first successful buy returns; no fill → try next):**
+**Cooldown / window:** `elapsed − last_completed_pair_elapsed ≥ max(pair_cooldown_sec, layer2_cooldown_sec)` (with mins 5s / 1s on those params). No new layers in the last `no_new_layers_last_seconds` of the window.
 
-1. **Higher‑VWAP dip** (`v7_layer2_dip_lead`)  
-   - Leg = side with **higher** held VWAP (tie → higher PM mid).  
-   - **Condition:** that side’s mid **<** its own VWAP − `layer2_dip_below_avg` (default 0.05).  
-   - **Size:** fixed `base_order_shares` clip. Then set `pending_second` for the **opposite** hedge.
+**Dip:** Lead mid must satisfy `mid_lead ≤ avg_lead − 0.07` (7¢ under that leg’s held VWAP).
 
-2. **Lower‑VWAP deep dip** (`v7_layer2_lowvwap_dip`)  
-   - Leg = **lower** held VWAP (tie → opposite of PM lead).  
-   - **Condition:** that side’s mid **<** its own VWAP − `layer2_low_vwap_dip_below_avg` (default 0.20).  
-   - Same clip / pending pattern as (1).
+**Band:** Lead mid in `[balanced_entry_min_pm, balanced_entry_max_pm]` (default 20¢–80¢) and `≤ first_leg_max_pm`.
 
-3. *(Not a “dip”; next block)* Binance spike first leg when still allowed (see §4).
-
----
-
-## 4) Binance spike first leg (`v7_first_binance_spike`)
-
-**When:** `can_open` = balanced **and** both-sided enough.  
-**Cooldown:** Require `elapsed − last_completed_pair_elapsed ≥ pair_cooldown_sec` (min 1s).
-
-**Market gates (same second):**
-
-- **Volume spike:** this second’s Binance base volume ≥ `volume_spike_ratio × max(volume_floor, rolling_mean_vol over lookback excluding t)`.
-- **Price jump:** `|btc_px[t] − btc_px[t−1]| ≥ btc_abs_move_min_usd` (with small fallback window if 1s move is flat).
-
-**Side:** BTC momentum — up move → buy **UP**, down move → buy **DOWN** (`_btc_momentum_side`).
-
-**PM gate:** chosen side’s mid ≤ `first_leg_max_pm` (default 0.62).
-
-**Size:** fixed `base_order_shares` clip; then set `pending_second` for opposite hedge.
+**After fill:** `pending_second` on the opposite side.
 
 ---
 
 ## Hedge after any first leg
 
-Same §0 rules for hedges opened by spike, higher‑VWAP layer, or lower‑VWAP layer.
+Same §0 rules for hedges after flat entry or balanced layer.
 
 ---
 
