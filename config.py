@@ -282,9 +282,10 @@ class BotConfig:
     shaman_v1_rules_path: str = ""
     shaman_v1_kline_limit: int = 500
     shaman_v1_price_pad: float = 0.03
-    shaman_v1_notional_base_usdc: float = 3.0
-    shaman_v1_notional_per_extra_signal_usdc: float = 1.0
-    shaman_v1_notional_max_usdc: float = 6.0
+    # SHAMAN v1: each rule on the winning side (nG or nR at bar close) adds this much USDC to clip notional.
+    shaman_v1_usdc_per_signal: float = 1.0
+    # Hard cap on total clip notional (many rules can fire on one bar).
+    shaman_v1_notional_max_usdc: float = 500.0
     shaman_v1_min_shares: int = 1
     shaman_v1_min_notional_usdc: float = 1.0
 
@@ -595,11 +596,12 @@ class BotConfig:
             shaman_v1_rules_path=os.getenv("BOT_SHAMAN_V1_RULES_PATH", "").strip(),
             shaman_v1_kline_limit=max(120, _env_int("BOT_SHAMAN_V1_KLINE_LIMIT", 500)),
             shaman_v1_price_pad=max(0.0, _env_float("BOT_SHAMAN_V1_PRICE_PAD", 0.03)),
-            shaman_v1_notional_base_usdc=max(1.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_BASE", 3.0)),
-            shaman_v1_notional_per_extra_signal_usdc=max(
-                0.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_PER_EXTRA", 1.0)
+            shaman_v1_usdc_per_signal=max(
+                0.5, _env_float("BOT_SHAMAN_V1_USDC_PER_SIGNAL", 1.0)
             ),
-            shaman_v1_notional_max_usdc=max(3.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_MAX", 6.0)),
+            shaman_v1_notional_max_usdc=max(
+                1.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_MAX", 500.0)
+            ),
             shaman_v1_min_shares=max(1, _env_int("BOT_SHAMAN_V1_MIN_SHARES", 1)),
             shaman_v1_min_notional_usdc=max(0.5, _env_float("BOT_SHAMAN_V1_MIN_NOTIONAL_USDC", 1.0)),
         )

@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 # Bump when syncing from kng_bot3 (labels only; COPY list below is the real contract).
 # SHAMAN v1 only: Binance 5m/15m signals -> optional Polymarket FAK.
-ARG KNG3_IMAGE_TAG=2026-04-26-shaman-5m-trim-185-live-ready
+ARG KNG3_IMAGE_TAG=2026-04-27-shaman-1usd-per-signal
 LABEL org.opencontainers.image.title="KNG3 SHAMAN v1" \
       org.opencontainers.image.description="Docker: SHAMAN v1 (Binance 5m/15m -> Polymarket UP/DOWN)" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
