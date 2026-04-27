@@ -7,7 +7,7 @@ import importlib.util
 import json
 import logging
 import sys
-from decimal import ROUND_DOWN, Decimal
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -121,15 +121,24 @@ def _binance_rg(i: int, o: list[float], c: list[float]) -> str | None:
     return None
 
 
+def _round_notional_clips_usdc(x: float) -> float:
+    """CLOB: send only USDC notional with **at most one decimal** (e.g. 1.3, 2.0), never < $1.00."""
+    if x <= 0:
+        return 0.0
+    d = Decimal(str(float(x))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    return float(max(Decimal("1.0"), d))
+
+
 def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
-    """USDC clip notional: **$1.25** if exactly one rule on the winning side; else **$1 × count** (2→$2, 8→$8)."""
+    """USDC clip: $1.25 (config) if one rule, else $1×count; cap; then one-decimal notional, min $1."""
     if winning_count <= 0:
         return 0.0
     if winning_count == 1:
         raw = float(cfg.shaman_v1_usdc_single_signal)
     else:
         raw = float(winning_count) * float(cfg.shaman_v1_usdc_per_signal)
-    return min(float(cfg.shaman_v1_notional_max_usdc), raw)
+    capped = min(float(cfg.shaman_v1_notional_max_usdc), raw)
+    return _round_notional_clips_usdc(capped)
 
 
 def _shares_for_usdc_clip(*, notional_usdc: float, limit_px: float) -> float:
@@ -354,7 +363,7 @@ class ShamanV1Engine:
                 if ask is not None and ask > 0:
                     pad = max(0.0, float(self.config.shaman_v1_price_pad))
                     entry_limit_px = min(0.99, round(float(ask) + pad, 2))
-                    # Dollar clip: 1 signal → usdc_single; 2+ → n * usdc_per_signal.
+                    # Notional: 1 / n rules → raw USDC, cap, then 1dp rounding (min $1); then shares@4dp.
                     # CLOB ``size`` is outcome shares; cap notional ≈ shares * limit_price (no min-share gate).
                     shares = _shares_for_usdc_clip(notional_usdc=notional, limit_px=entry_limit_px)
                     if shares > 1e-9:

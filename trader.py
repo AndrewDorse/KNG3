@@ -26,10 +26,11 @@ from config import (
 
 
 def _clob_taker_size_shares(size: float) -> float:
-    """Polymarket CLOB: taker (outcome share) size must be at most 4 decimal places."""
+    """Polymarket CLOB: taker (outcome share) size — max 4 decimal places, no float noise."""
     if size <= 0:
         return 0.0
-    return float(Decimal(str(float(size))).quantize(Decimal("0.0001"), rounding=ROUND_DOWN))
+    q = Decimal(str(float(size))).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    return float(f"{float(q):.4f}")
 
 
 def _retry(max_attempts=2, backoff_base=0.5, retryable=(requests.RequestException,)):
