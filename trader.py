@@ -205,7 +205,7 @@ class PolymarketTrader:
         self,
         token: TokenMarket,
         price: float,
-        size: int,
+        size: float,
         *,
         fee_rate_bps: int | None = None,
     ) -> dict[str, Any]:
@@ -219,7 +219,7 @@ class PolymarketTrader:
         self,
         token: TokenMarket,
         price: float,
-        size: int,
+        size: float,
         *,
         fee_rate_bps: int | None = None,
     ) -> dict[str, Any]:
@@ -239,7 +239,7 @@ class PolymarketTrader:
         self,
         token: TokenMarket,
         price: float,
-        size: int,
+        size: float,
         *,
         confirm_get_order: bool = True,
         fee_rate_bps: int | None = None,
@@ -262,7 +262,7 @@ class PolymarketTrader:
         self,
         token: TokenMarket,
         price: float,
-        size: int,
+        size: float,
         *,
         confirm_get_order: bool = True,
         fee_rate_bps: int | None = None,
@@ -283,7 +283,7 @@ class PolymarketTrader:
         return fak_buy_with_confirm(
             self.client.get_order,
             raw,
-            requested_shares=size,
+            requested_shares=float(size),
             limit_price=float(price),
             confirm=confirm_get_order,
         )

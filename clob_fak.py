@@ -12,10 +12,10 @@ LOGGER = logging.getLogger("polymarket_btc_ladder")
 
 
 def _cap_fak_fill_to_requested(
-    requested_shares: int, filled_sh: float, filled_usdc: float
+    requested_shares: float, filled_sh: float, filled_usdc: float
 ) -> tuple[float, float, float]:
     """Outcome shares must never exceed what we asked the CLOB to buy (mis-parsed takingAmount, etc.)."""
-    cap = float(max(0, int(requested_shares)))
+    cap = float(max(0.0, float(requested_shares)))
     if filled_sh <= cap + 1e-6:
         apx = (filled_usdc / filled_sh) if filled_sh > 1e-12 else 0.0
         return filled_sh, filled_usdc, apx
@@ -35,7 +35,7 @@ class FakBuyResult:
     ok: bool
     order_id: str
     status: str
-    requested_shares: int
+    requested_shares: float
     filled_shares: float
     filled_usdc: float
     avg_price: float
@@ -82,7 +82,7 @@ def _open_order_buy_economics(od: dict) -> tuple[float, float] | None:
 def parse_fak_buy_post_response(
     resp: Any,
     *,
-    requested_shares: int,
+    requested_shares: float,
     limit_price: float,
 ) -> FakBuyResult:
     """Interpret POST /order JSON after submitting a marketable (FAK) buy."""
@@ -215,7 +215,7 @@ def fak_buy_with_confirm(
     get_order_fn: Any,
     post_resp: Any,
     *,
-    requested_shares: int,
+    requested_shares: float,
     limit_price: float,
     confirm: bool = True,
 ) -> FakBuyResult:

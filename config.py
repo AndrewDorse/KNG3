@@ -282,8 +282,10 @@ class BotConfig:
     shaman_v1_rules_path: str = ""
     shaman_v1_kline_limit: int = 500
     shaman_v1_price_pad: float = 0.03
-    # SHAMAN v1: each rule on the winning side (nG or nR at bar close) adds this much USDC to clip notional.
+    # SHAMAN v1: each rule on the winning side (nG or nR at bar close) adds this much USDC to clip notional
+    # when **two or more** rules agree (2×$1, 8×$8, …). Single-rule clips use ``shaman_v1_usdc_single_signal``.
     shaman_v1_usdc_per_signal: float = 1.0
+    shaman_v1_usdc_single_signal: float = 1.25
     # Hard cap on total clip notional (many rules can fire on one bar).
     shaman_v1_notional_max_usdc: float = 500.0
     shaman_v1_min_shares: int = 1
@@ -598,6 +600,9 @@ class BotConfig:
             shaman_v1_price_pad=max(0.0, _env_float("BOT_SHAMAN_V1_PRICE_PAD", 0.03)),
             shaman_v1_usdc_per_signal=max(
                 0.5, _env_float("BOT_SHAMAN_V1_USDC_PER_SIGNAL", 1.0)
+            ),
+            shaman_v1_usdc_single_signal=max(
+                0.5, _env_float("BOT_SHAMAN_V1_USDC_SINGLE_SIGNAL", 1.25)
             ),
             shaman_v1_notional_max_usdc=max(
                 1.0, _env_float("BOT_SHAMAN_V1_NOTIONAL_MAX", 500.0)
