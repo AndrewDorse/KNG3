@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import threading
 import time
+from decimal import ROUND_DOWN, Decimal
 from functools import wraps
 from typing import Any
 
@@ -22,6 +23,13 @@ from config import (
     HOST, CHAIN_ID, BUY, SELL, LOGGER,
     BotConfig, TokenMarket, parse_balance_response,
 )
+
+
+def _clob_taker_size_shares(size: float) -> float:
+    """Polymarket CLOB: taker (outcome share) size must be at most 4 decimal places."""
+    if size <= 0:
+        return 0.0
+    return float(Decimal(str(float(size))).quantize(Decimal("0.0001"), rounding=ROUND_DOWN))
 
 
 def _retry(max_attempts=2, backoff_base=0.5, retryable=(requests.RequestException,)):
@@ -223,10 +231,11 @@ class PolymarketTrader:
         *,
         fee_rate_bps: int | None = None,
     ) -> dict[str, Any]:
+        sz = _clob_taker_size_shares(size)
         order_kwargs: dict[str, Any] = {
             "token_id": token.token_id,
             "price": round(price, 2),
-            "size": float(size),
+            "size": sz,
             "side": BUY,
         }
         if fee_rate_bps is not None:
@@ -269,10 +278,11 @@ class PolymarketTrader:
     ) -> Any:
         from clob_fak import fak_buy_with_confirm
 
+        sz = _clob_taker_size_shares(size)
         order_kwargs: dict[str, Any] = {
             "token_id": token.token_id,
             "price": round(price, 2),
-            "size": float(size),
+            "size": sz,
             "side": BUY,
         }
         if fee_rate_bps is not None:
@@ -283,7 +293,7 @@ class PolymarketTrader:
         return fak_buy_with_confirm(
             self.client.get_order,
             raw,
-            requested_shares=float(size),
+            requested_shares=float(sz),
             limit_price=float(price),
             confirm=confirm_get_order,
         )
@@ -323,7 +333,7 @@ class PolymarketTrader:
         order = OrderArgs(
             token_id=token.token_id,
             price=round(price, 2),
-            size=float(size),
+            size=_clob_taker_size_shares(size),
             side=SELL,
         )
         signed = self.client.create_order(order)

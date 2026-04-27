@@ -133,14 +133,14 @@ def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
 
 
 def _shares_for_usdc_clip(*, notional_usdc: float, limit_px: float) -> float:
-    """Outcome shares sized so ``shares * limit_px <= notional`` (6dp floor; avoids float overshoot)."""
+    """Outcome shares sized so ``shares * limit_px <= notional`` (4dp floor; CLOB taker size max 4 decimals)."""
     if notional_usdc <= 0 or limit_px <= 0:
         return 0.0
     usd = Decimal(str(round(float(notional_usdc), 8)))
     px = Decimal(str(round(float(limit_px), 8)))
     if px <= 0:
         return 0.0
-    q = (usd / px).quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+    q = (usd / px).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
     return float(q)
 
 
