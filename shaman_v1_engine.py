@@ -6,8 +6,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import math
 import sys
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -121,16 +121,15 @@ def _binance_rg(i: int, o: list[float], c: list[float]) -> str | None:
     return None
 
 
-def _round_notional_clips_usdc(x: float) -> float:
-    """CLOB: send only USDC notional with **at most one decimal** (e.g. 1.3, 2.0), never < $1.00."""
+def _integer_clip_notional_usdc(x: float) -> float:
+    """Clip budget in whole USDC only ($1, $2, …), never < $1."""
     if x <= 0:
         return 0.0
-    d = Decimal(str(float(x))).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
-    return float(max(Decimal("1.0"), d))
+    return float(max(1, int(math.floor(float(x) + 1e-9))))
 
 
 def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
-    """USDC clip: $1.25 (config) if one rule, else $1×count; cap; then one-decimal notional, min $1."""
+    """USDC clip: raw $ from rules, cap, then **integer** dollars (min $1)."""
     if winning_count <= 0:
         return 0.0
     if winning_count == 1:
@@ -138,19 +137,18 @@ def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
     else:
         raw = float(winning_count) * float(cfg.shaman_v1_usdc_per_signal)
     capped = min(float(cfg.shaman_v1_notional_max_usdc), raw)
-    return _round_notional_clips_usdc(capped)
+    return _integer_clip_notional_usdc(capped)
 
 
 def _shares_for_usdc_clip(*, notional_usdc: float, limit_px: float) -> float:
-    """Outcome shares sized so ``shares * limit_px <= notional`` (4dp floor; CLOB taker size max 4 decimals)."""
+    """**Whole shares only** (2 not 2.02): floor(notional/price) so the CLOB never sees long fractions."""
     if notional_usdc <= 0 or limit_px <= 0:
         return 0.0
-    usd = Decimal(str(round(float(notional_usdc), 8)))
-    px = Decimal(str(round(float(limit_px), 8)))
+    usd, px = float(notional_usdc), float(limit_px)
     if px <= 0:
         return 0.0
-    q = (usd / px).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
-    return float(q)
+    n = int(math.floor(usd / px + 1e-12))
+    return float(max(0, n))
 
 
 @dataclass(slots=True)

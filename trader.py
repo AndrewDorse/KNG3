@@ -26,7 +26,11 @@ from config import (
 
 
 def _clob_taker_size_shares(size: float) -> float:
-    """Polymarket CLOB: taker (outcome share) size — max 4 decimal places, no float noise."""
+    """Polymarket CLOB: taker (outcome share) size — max 4 decimal places, no float noise.
+
+    SHAMAN sizes outcome shares as **integers** in ``shaman_v1_engine`` so notional/price
+    never produces values like 2.0202 at 0.99.
+    """
     if size <= 0:
         return 0.0
     q = Decimal(str(float(size))).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
