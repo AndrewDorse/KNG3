@@ -30,6 +30,26 @@ def _cap_fak_fill_to_requested(
     return cap, new_usdc, apx
 
 
+def _cap_fak_fill_to_requested_usdc(
+    requested_usdc: float, filled_sh: float, filled_usdc: float
+) -> tuple[float, float, float]:
+    """When the order was sized in **USDC** (market buy), do not report more than that spent."""
+    cap = float(max(0.0, float(requested_usdc)))
+    if filled_usdc <= cap + 1e-6:
+        apx = (filled_usdc / filled_sh) if filled_sh > 1e-12 else 0.0
+        return filled_sh, filled_usdc, apx
+    LOGGER.warning(
+        "CLOB FAK: clamping filled_usdc $%.4f down to requested $%.4f (sh scaled)",
+        filled_usdc,
+        cap,
+    )
+    scale = cap / filled_usdc if filled_usdc > 1e-12 else 0.0
+    new_sh = filled_sh * scale
+    new_usdc = cap
+    apx = (new_usdc / new_sh) if new_sh > 1e-12 else 0.0
+    return new_sh, new_usdc, apx
+
+
 @dataclass(slots=True)
 class FakBuyResult:
     ok: bool
@@ -84,8 +104,13 @@ def parse_fak_buy_post_response(
     *,
     requested_shares: float,
     limit_price: float,
+    requested_usdc: float | None = None,
 ) -> FakBuyResult:
-    """Interpret POST /order JSON after submitting a marketable (FAK) buy."""
+    """Interpret POST /order JSON after submitting a marketable (FAK) buy.
+
+    If ``requested_usdc`` is set (USDC-denominated market buy), cap spend to that; else cap by
+    ``requested_shares`` (limit-order / share path).
+    """
     if not isinstance(resp, dict):
         return FakBuyResult(
             ok=False,
@@ -125,13 +150,28 @@ def parse_fak_buy_post_response(
     if taking > 1e-12 and making >= 0:
         filled_sh = taking
         filled_usdc = making
-    elif status == "matched" and requested_shares > 0:
-        # Fallback when amounts omitted: assume full fill at limit (slippage unknown).
-        filled_sh = float(requested_shares)
-        filled_usdc = filled_sh * limit_price
-        LOGGER.debug("FAK post: matched but no amounts; assuming full @ limit")
+    elif status == "matched" and (
+        (requested_shares and requested_shares > 0)
+        or (requested_usdc and requested_usdc > 1e-12)
+    ):
+        if requested_usdc and requested_usdc > 1e-12:
+            # Rough split when the POST omits taking/making (VWAP unknown).
+            lp = max(float(limit_price), 0.01)
+            filled_sh = float(requested_usdc) / lp
+            filled_usdc = float(requested_usdc)
+        else:
+            filled_sh = float(requested_shares)
+            filled_usdc = filled_sh * limit_price
+        LOGGER.debug("FAK post: matched but no amounts; estimated @ limit / usdc budget")
 
-    filled_sh, filled_usdc, avg_px = _cap_fak_fill_to_requested(requested_shares, filled_sh, filled_usdc)
+    if requested_usdc is not None and float(requested_usdc) > 1e-12:
+        filled_sh, filled_usdc, avg_px = _cap_fak_fill_to_requested_usdc(
+            float(requested_usdc), filled_sh, filled_usdc
+        )
+    else:
+        filled_sh, filled_usdc, avg_px = _cap_fak_fill_to_requested(
+            requested_shares, filled_sh, filled_usdc
+        )
     if avg_px <= 1e-12:
         avg_px = float(limit_price)
 
@@ -218,15 +258,24 @@ def fak_buy_with_confirm(
     requested_shares: float,
     limit_price: float,
     confirm: bool = True,
+    requested_usdc: float | None = None,
 ) -> FakBuyResult:
     """Parse POST response; optionally refine fill via GET /order."""
     base = parse_fak_buy_post_response(
         post_resp,
         requested_shares=requested_shares,
         limit_price=limit_price,
+        requested_usdc=requested_usdc,
     )
     if base.filled_shares > 1e-9:
-        sh, usdc, apx = _cap_fak_fill_to_requested(requested_shares, base.filled_shares, base.filled_usdc)
+        if requested_usdc is not None and float(requested_usdc) > 1e-12:
+            sh, usdc, apx = _cap_fak_fill_to_requested_usdc(
+                float(requested_usdc), base.filled_shares, base.filled_usdc
+            )
+        else:
+            sh, usdc, apx = _cap_fak_fill_to_requested(
+                requested_shares, base.filled_shares, base.filled_usdc
+            )
         if apx <= 1e-12:
             apx = base.avg_price
         return replace(
@@ -260,7 +309,10 @@ def fak_buy_with_confirm(
             error="no_fill_confirmed",
             raw=base.raw,
         )
-    sh, usdc, apx = _cap_fak_fill_to_requested(requested_shares, sh, usdc)
+    if requested_usdc is not None and float(requested_usdc) > 1e-12:
+        sh, usdc, apx = _cap_fak_fill_to_requested_usdc(float(requested_usdc), sh, usdc)
+    else:
+        sh, usdc, apx = _cap_fak_fill_to_requested(requested_shares, sh, usdc)
     if apx <= 1e-12 and sh > 1e-12:
         apx = usdc / sh
     return FakBuyResult(
