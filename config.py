@@ -596,7 +596,9 @@ class BotConfig:
                 2.0, _env_float("BOT_PALADIN_V7_RECONCILE_FLATTEN_COOLDOWN_SEC", 10.0)
             ),
             shaman_v1_rules_path=os.getenv("BOT_SHAMAN_V1_RULES_PATH", "").strip(),
-            shaman_v1_kline_limit=max(120, _env_int("BOT_SHAMAN_V1_KLINE_LIMIT", 500)),
+            # Match research depth: body/range token buckets use percentiles over the full window.
+            # 500 bars was far short of 28d backtests (~8k bars) and drove nG=nR=0 "TIE" despite good candles.
+            shaman_v1_kline_limit=max(120, min(10_000, _env_int("BOT_SHAMAN_V1_KLINE_LIMIT", 2500))),
             shaman_v1_price_pad=max(0.0, _env_float("BOT_SHAMAN_V1_PRICE_PAD", 0.03)),
             shaman_v1_usdc_per_signal=max(
                 0.5, _env_float("BOT_SHAMAN_V1_USDC_PER_SIGNAL", 1.0)

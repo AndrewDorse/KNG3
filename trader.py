@@ -25,6 +25,12 @@ from config import (
     BotConfig, TokenMarket, parse_balance_response,
 )
 
+_ORDER_VERSION_MISMATCH_SNIPPET = "order_version_mismatch"
+
+
+def _is_order_version_mismatch_error(exc: Exception) -> bool:
+    return _ORDER_VERSION_MISMATCH_SNIPPET in str(exc).lower()
+
 
 def _clob_taker_size_shares(size: float) -> float:
     """Polymarket CLOB: taker (outcome share) size — max 4 decimal places, no float noise."""
@@ -321,17 +327,36 @@ class PolymarketTrader:
         u = float(usdc)
         if u <= 0:
             raise ValueError("usdc must be > 0")
-        margs = MarketOrderArgs(
-            token_id=token.token_id,
-            amount=u,
-            side=BUY,
-            price=0.0,
-            order_type=OrderType.FAK,
-        )
-        if fee_rate_bps is not None:
-            margs.fee_rate_bps = fee_rate_bps
-        signed = self.client.create_market_order(margs, options=None)
-        return self.client.post_order(signed, OrderType.FAK)
+        max_attempts = 3
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            margs = MarketOrderArgs(
+                token_id=token.token_id,
+                amount=u,
+                side=BUY,
+                price=0.0,
+                order_type=OrderType.FAK,
+            )
+            if fee_rate_bps is not None:
+                margs.fee_rate_bps = fee_rate_bps
+            signed = self.client.create_market_order(margs, options=None)
+            try:
+                return self.client.post_order(signed, OrderType.FAK)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_attempts and _is_order_version_mismatch_error(exc):
+                    LOGGER.warning(
+                        "CLOB order_version_mismatch on market buy usdc; retrying %d/%d token=%s usdc=%.2f",
+                        attempt + 1,
+                        max_attempts,
+                        token.token_id[:20] + "…",
+                        u,
+                    )
+                    continue
+                raise
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("market buy failed without exception")
 
     def place_market_buy_usdc_with_result(
         self,
@@ -363,18 +388,41 @@ class PolymarketTrader:
         u = float(usdc)
         if u <= 0:
             raise ValueError("usdc must be > 0")
-        margs = MarketOrderArgs(
-            token_id=token.token_id,
-            amount=u,
-            side=BUY,
-            price=0.0,
-            order_type=OrderType.FAK,
-        )
-        if fee_rate_bps is not None:
-            margs.fee_rate_bps = fee_rate_bps
-        signed = self.client.create_market_order(margs, options=None)
-        limit_px = float(margs.price)
-        raw = self.client.post_order(signed, OrderType.FAK)
+        max_attempts = 3
+        last_exc: Exception | None = None
+        raw: dict[str, Any] | None = None
+        limit_px = 0.0
+        for attempt in range(1, max_attempts + 1):
+            margs = MarketOrderArgs(
+                token_id=token.token_id,
+                amount=u,
+                side=BUY,
+                price=0.0,
+                order_type=OrderType.FAK,
+            )
+            if fee_rate_bps is not None:
+                margs.fee_rate_bps = fee_rate_bps
+            signed = self.client.create_market_order(margs, options=None)
+            limit_px = float(margs.price)
+            try:
+                raw = self.client.post_order(signed, OrderType.FAK)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_attempts and _is_order_version_mismatch_error(exc):
+                    LOGGER.warning(
+                        "CLOB order_version_mismatch on market buy usdc+confirm; retrying %d/%d token=%s usdc=%.2f",
+                        attempt + 1,
+                        max_attempts,
+                        token.token_id[:20] + "…",
+                        u,
+                    )
+                    continue
+                raise
+        if raw is None:
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError("market buy with result failed without response")
         est_max_sh = u / 0.01 + 10.0
         return fak_buy_with_confirm(
             self.client.get_order,

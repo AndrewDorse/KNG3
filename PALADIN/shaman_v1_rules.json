@@ -633,14 +633,6 @@
   },
   {
     "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GRRG|last=GLh",
-    "pred": "R",
-    "wr": 0.675,
-    "n": 40
-  },
-  {
-    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "RRG|last=GSh|rng=w",
     "pred": "G",
@@ -654,14 +646,6 @@
     "pred": "R",
     "wr": 0.64286,
     "n": 42
-  },
-  {
-    "timeframe": "15m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GG|last=GSh",
-    "pred": "G",
-    "wr": 0.64,
-    "n": 50
   },
   {
     "timeframe": "5m",
@@ -732,22 +716,6 @@
     "family": "B_rg_suffix_lastTok",
     "pattern_key": "GGRGR|last=RLh",
     "pred": "R",
-    "wr": 0.625,
-    "n": 32
-  },
-  {
-    "timeframe": "5m",
-    "family": "C_rg_suffix_last2Tok",
-    "pattern_key": "GRGR|t-1=GMl|t=RSl",
-    "pred": "G",
-    "wr": 0.625,
-    "n": 32
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "RGGRR|last=RLh|rng=W",
-    "pred": "G",
     "wr": 0.625,
     "n": 32
   },
@@ -857,22 +825,6 @@
   },
   {
     "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RGGRR|last=RLh",
-    "pred": "G",
-    "wr": 0.61111,
-    "n": 36
-  },
-  {
-    "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "RRGG|last=GSh",
-    "pred": "G",
-    "wr": 0.61111,
-    "n": 36
-  },
-  {
-    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "GRGGG|last=GLh|rng=W",
     "pred": "R",
@@ -958,14 +910,6 @@
     "pred": "R",
     "wr": 0.6,
     "n": 45
-  },
-  {
-    "timeframe": "15m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GR|last=RLm",
-    "pred": "G",
-    "wr": 0.6,
-    "n": 30
   },
   {
     "timeframe": "15m",
@@ -1153,14 +1097,6 @@
   },
   {
     "timeframe": "5m",
-    "family": "B_rg_suffix_lastTok",
-    "pattern_key": "GGRRG|last=GLh",
-    "pred": "R",
-    "wr": 0.69565,
-    "n": 23
-  },
-  {
-    "timeframe": "5m",
     "family": "D_rg_rng_lastTok",
     "pattern_key": "GGRR|last=RLl|rng=w",
     "pred": "G",
@@ -1206,14 +1142,6 @@
     "pred": "G",
     "wr": 0.73684,
     "n": 19
-  },
-  {
-    "timeframe": "5m",
-    "family": "D_rg_rng_lastTok",
-    "pattern_key": "RGG|last=GMh|rng=n",
-    "pred": "R",
-    "wr": 0.73333,
-    "n": 15
   },
   {
     "timeframe": "5m",

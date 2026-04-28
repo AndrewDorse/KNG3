@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""SHAMAN v1: Binance 5m/15m signals at each closed kline; optional PM FAK. Logs at edges + INIT."""
+"""SHAMAN v1: Binance 5m/15m signals at each closed kline; optional PM FAK. Logs at edges + INIT.
+
+Each poll: fetch 5m + 15m at the same ``now_ms``, then emit all ``WINDOW_END`` lines (5m, 15m) before
+any ``WINDOW_START`` so a new 5m start never appears above an unresolved 15m end in the same tick.
+For a single label, end always precedes start (same as before)."""
 
 from __future__ import annotations
 
@@ -10,9 +14,9 @@ import math
 import sys
 import time
 from dataclasses import dataclass
+from typing import Any, NamedTuple
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import requests
 
@@ -21,6 +25,7 @@ from market_locator import GammaMarketLocator
 from trader import PolymarketTrader
 
 _BINANCE_KLINES = "https://api.binance.com/api/v3/klines"
+_FAK_NO_MATCH_ERROR_SNIPPET = "no orders found to match with fak order"
 _LOG = logging.getLogger("shaman_v1")
 
 
@@ -87,16 +92,40 @@ def _fetch_binance_klines(
     limit: int,
     timeout: float,
 ) -> tuple[list[int], list[float], list[float], list[float], list[float], list[float]]:
-    r = session.get(
-        _BINANCE_KLINES,
-        params={"symbol": symbol.upper(), "interval": interval, "limit": limit},
-        timeout=timeout,
-    )
-    r.raise_for_status()
-    rows = r.json()
+    """Fetch at least ``limit`` klines, oldest first.
+
+    The public API returns **at most 1000** bars per call; the previous single-call path
+    could only ever load ≤1000. Research/backtests use ~8k+ bars. Pattern ``aux`` (body
+    and range percentiles) is computed on the **full** array — a short live window is why
+    live often saw ``nG=0 nR=0`` (nothing matches) even when the closed candle is clearly G/R
+    (see ``candle=`` in logs) — *not* a broken Binance feed.
+    """
+    need_total = int(limit)
+    need_total = min(max(120, need_total), 10_000)
+    rows: list = []
+    end_time: int | None = None
+    while len(rows) < need_total:
+        need = min(1000, need_total - len(rows))
+        params: dict[str, str | int] = {
+            "symbol": symbol.upper(),
+            "interval": interval,
+            "limit": need,
+        }
+        if end_time is not None:
+            params["endTime"] = end_time
+        r = session.get(_BINANCE_KLINES, params=params, timeout=timeout)
+        r.raise_for_status()
+        batch = r.json()
+        if not batch:
+            break
+        rows = batch + rows
+        end_time = int(batch[0][0]) - 1
+        if len(batch) < need:
+            break
+    tail = rows[-need_total:]
     opens_ms: list[int] = []
     o, hi, lo, c, v = [], [], [], [], []
-    for row in rows:
+    for row in tail:
         opens_ms.append(int(row[0]))
         o.append(float(row[1]))
         hi.append(float(row[2]))
@@ -109,6 +138,24 @@ def _fetch_binance_klines(
 def _index_open_ms(opens_ms: list[int], open_ms: int) -> int | None:
     for i, t in enumerate(opens_ms):
         if t == open_ms:
+            return i
+    return None
+
+
+def _index_last_fully_closed_bar(opens_ms: list[int], interval_ms: int, now_ms: int) -> int | None:
+    """Index of the most recent kline whose interval has fully ended (Binance bar open = start time).
+
+    Default REST behavior: the last row is the **in-progress** candle, so the last *fully* closed
+    bar is at ``len-2``. Some feeds / mirrors return **only completed** rows; then the last row is
+    already closed and the signal bar is at ``len-1``. Using ``len-2`` in that case evaluates the
+    **previous** period — rules look "dead" (nG=nR=0) while the candle still moves on the chart.
+    """
+    if len(opens_ms) < 2:
+        return None
+    im = int(interval_ms)
+    nm = int(now_ms)
+    for i in range(len(opens_ms) - 1, -1, -1):
+        if int(opens_ms[i]) + im <= nm:
             return i
     return None
 
@@ -128,6 +175,11 @@ def _integer_clip_notional_usdc(x: float) -> float:
     return float(max(1, int(math.floor(float(x) + 1e-9))))
 
 
+def _is_fak_no_match_error(exc: Exception) -> bool:
+    """True when CLOB rejected FAK because no resting orders matched the clip."""
+    return _FAK_NO_MATCH_ERROR_SNIPPET in str(exc).lower()
+
+
 def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
     """USDC clip: raw $ from rules, cap, then **integer** dollars (min $1)."""
     if winning_count <= 0:
@@ -138,6 +190,19 @@ def _notional_usdc(winning_count: int, cfg: BotConfig) -> float:
         raw = float(winning_count) * float(cfg.shaman_v1_usdc_per_signal)
     capped = min(float(cfg.shaman_v1_notional_max_usdc), raw)
     return _integer_clip_notional_usdc(capped)
+
+
+class _KlineSnapshot(NamedTuple):
+    """One Binance kline buffer + last fully closed index (``closed_open_ms = opens[i_closed]``)."""
+
+    opens_ms: list[int]
+    o: list[float]
+    hi: list[float]
+    lo: list[float]
+    c: list[float]
+    v: list[float]
+    i_closed: int
+    closed_open_ms: int
 
 
 @dataclass(slots=True)
@@ -158,7 +223,7 @@ class _Pending:
 
 
 class ShamanV1Engine:
-    """Advance on Binance ``opens_ms[-2]`` only (never wall-clock equality); WINDOW_START / WINDOW_END."""
+    """Advance when the last *fully closed* kline advances (see ``_index_last_fully_closed_bar``)."""
 
     def __init__(
         self,
@@ -309,13 +374,24 @@ class ShamanV1Engine:
         window_minutes: int,
         rules: list[dict[str, Any]],
         closed_open_ms: int,
+        signal_t: int,
+        opens_ms: list[int],
         o: list[float],
         hi: list[float],
         lo: list[float],
         c: list[float],
         v: list[float],
     ) -> _Pending:
-        t = len(o) - 2
+        t = signal_t
+        if t >= 0 and t < len(opens_ms) and opens_ms[t] != closed_open_ms:
+            _LOG.error(
+                "SHAMAN kline index bug: opens_ms[t]!=closed_open_ms t=%s %s!=%s",
+                t,
+                opens_ms[t],
+                closed_open_ms,
+            )
+        _candle = _binance_rg(t, o, c)
+        candle_s = "X" if _candle is None else _candle
         ng, nr = self._aggregate_at_t(rules, o, hi, lo, c, v, t)
         if ng > nr:
             pred, win_side, winning = "G", "UP", ng
@@ -326,8 +402,10 @@ class ShamanV1Engine:
 
         notional = _notional_usdc(winning, self.config) if pred is not None else 0.0
         next_open_ms = closed_open_ms + interval_ms
+        # ``pred`` is the **rule vote** (G majority / R majority / no majority "TIE"), not the candle color.
         sig_part = (
-            f"nG={ng} nR={nr} pred_binance={pred or 'TIE'} pred_PM={win_side or 'NONE'} "
+            f"klines_n={len(o)} i_sig={t} nG={ng} nR={nr} "
+            f"candle={candle_s} rules_vote={pred or 'TIE'} pred_PM={win_side or 'NONE'} "
             f"winning_signals={winning} "
             f"usdc_1={float(self.config.shaman_v1_usdc_single_signal):.2f} usdc_n_each={float(self.config.shaman_v1_usdc_per_signal):.2f} "
             f"notional_usdc={notional:.2f}"
@@ -363,19 +441,40 @@ class ShamanV1Engine:
                             f"ref_limit≈{entry_limit_px:.2f} slug={slug} Tminus_s={rem:.0f}"
                         )
                         if not self.config.dry_run:
-                            try:
-                                self.trader.place_market_buy_usdc_with_result(
-                                    tok,
-                                    notional,
-                                    confirm_get_order=self.config.polymarket_fak_confirm_get_order,
-                                )
-                                action += " SENT"
-                            except Exception as exc:
-                                action += f" ORDER_ERR={exc!r}"
+                            max_attempts = 3  # first try + 2 retries
+                            sent = False
+                            last_exc: Exception | None = None
+                            for attempt in range(1, max_attempts + 1):
+                                try:
+                                    # Wait for each FAK result before any retry (sequential attempts).
+                                    self.trader.place_market_buy_usdc_with_result(
+                                        tok,
+                                        notional,
+                                        confirm_get_order=self.config.polymarket_fak_confirm_get_order,
+                                    )
+                                    sent = True
+                                    if attempt == 1:
+                                        action += " SENT"
+                                    else:
+                                        action += f" SENT_RETRY{attempt}"
+                                    break
+                                except Exception as exc:
+                                    last_exc = exc
+                                    if attempt < max_attempts and _is_fak_no_match_error(exc):
+                                        _LOG.warning(
+                                            "SHAMAN_FAK_RETRY %s attempt=%d/%d no-match FAK; retrying",
+                                            label,
+                                            attempt,
+                                            max_attempts,
+                                        )
+                                        continue
+                                    break
+                            if not sent and last_exc is not None:
+                                action += f" ORDER_ERR={last_exc!r}"
                                 _LOG.warning(
                                     "SHAMAN_ORDER_ERR %s: %s (CLOB creds, balance, allowance, or API)",
                                     label,
-                                    exc,
+                                    last_exc,
                                     exc_info=True,
                                 )
                         else:
@@ -448,17 +547,14 @@ class ShamanV1Engine:
             slug=slug,
         )
 
-    def _step_interval(
+    def _snapshot_interval(
         self,
         *,
         label: str,
         interval: str,
         interval_ms: int,
-        window_minutes: int,
-        rules: list[dict[str, Any]],
-        watermark: int | None,
-        pending: _Pending | None,
-    ) -> tuple[int | None, _Pending | None]:
+        now_ms: int,
+    ) -> _KlineSnapshot | None:
         try:
             opens_ms, o, hi, lo, c, v = _fetch_binance_klines(
                 self._http,
@@ -469,63 +565,105 @@ class ShamanV1Engine:
             )
         except Exception as exc:
             _LOG.info("%s poll_binance_error err=%s (will retry)", label, exc)
-            return watermark, pending
+            return None
 
         if len(o) < 50 or len(opens_ms) < 3:
-            return watermark, pending
+            return None
 
-        closed_open_ms = opens_ms[-2]
-        if watermark is None:
-            return closed_open_ms, pending
-
-        if closed_open_ms <= watermark:
-            return watermark, pending
-
-        pending = self._resolve_pending_for_closed_bar(
-            label=label,
-            pending=pending,
-            closed_open_ms=closed_open_ms,
+        i_closed = _index_last_fully_closed_bar(opens_ms, interval_ms, int(now_ms))
+        if i_closed is None:
+            return None
+        return _KlineSnapshot(
             opens_ms=opens_ms,
-            o=o,
-            c=c,
-        )
-
-        new_pending = self._start_for_closed_signal_bar(
-            label=label,
-            interval_ms=interval_ms,
-            window_minutes=window_minutes,
-            rules=rules,
-            closed_open_ms=closed_open_ms,
             o=o,
             hi=hi,
             lo=lo,
             c=c,
             v=v,
+            i_closed=i_closed,
+            closed_open_ms=opens_ms[i_closed],
         )
-        return closed_open_ms, new_pending
 
     def run(self) -> None:
         self._log_init()
         while True:
             try:
-                self._watermark_5m, self._pending_5m = self._step_interval(
-                    label="5m",
-                    interval="5m",
-                    interval_ms=300_000,
-                    window_minutes=5,
-                    rules=self._rules_5m,
-                    watermark=self._watermark_5m,
-                    pending=self._pending_5m,
+                # One wall-clock instant for both fetches, then: all WINDOW_END before any WINDOW_START.
+                # (Previously: full 5m step ran before 15m, so 5m WINDOW_START could log before 15m WINDOW_END.)
+                now_ms = int(time.time() * 1000)
+                s5 = self._snapshot_interval(
+                    label="5m", interval="5m", interval_ms=300_000, now_ms=now_ms
                 )
-                self._watermark_15m, self._pending_15m = self._step_interval(
-                    label="15m",
-                    interval="15m",
-                    interval_ms=900_000,
-                    window_minutes=15,
-                    rules=self._rules_15m,
-                    watermark=self._watermark_15m,
-                    pending=self._pending_15m,
+                s15 = self._snapshot_interval(
+                    label="15m", interval="15m", interval_ms=900_000, now_ms=now_ms
                 )
+
+                if s5 is not None and self._watermark_5m is None:
+                    self._watermark_5m = s5.closed_open_ms
+                if s15 is not None and self._watermark_15m is None:
+                    self._watermark_15m = s15.closed_open_ms
+
+                adv5 = bool(
+                    s5 is not None
+                    and self._watermark_5m is not None
+                    and s5.closed_open_ms > self._watermark_5m
+                )
+                adv15 = bool(
+                    s15 is not None
+                    and self._watermark_15m is not None
+                    and s15.closed_open_ms > self._watermark_15m
+                )
+
+                if adv5:
+                    self._pending_5m = self._resolve_pending_for_closed_bar(
+                        label="5m",
+                        pending=self._pending_5m,
+                        closed_open_ms=s5.closed_open_ms,
+                        opens_ms=s5.opens_ms,
+                        o=s5.o,
+                        c=s5.c,
+                    )
+                if adv15:
+                    self._pending_15m = self._resolve_pending_for_closed_bar(
+                        label="15m",
+                        pending=self._pending_15m,
+                        closed_open_ms=s15.closed_open_ms,
+                        opens_ms=s15.opens_ms,
+                        o=s15.o,
+                        c=s15.c,
+                    )
+                if adv5 and s5 is not None:
+                    self._pending_5m = self._start_for_closed_signal_bar(
+                        label="5m",
+                        interval_ms=300_000,
+                        window_minutes=5,
+                        rules=self._rules_5m,
+                        closed_open_ms=s5.closed_open_ms,
+                        signal_t=s5.i_closed,
+                        opens_ms=s5.opens_ms,
+                        o=s5.o,
+                        hi=s5.hi,
+                        lo=s5.lo,
+                        c=s5.c,
+                        v=s5.v,
+                    )
+                    self._watermark_5m = s5.closed_open_ms
+                if adv15 and s15 is not None:
+                    self._pending_15m = self._start_for_closed_signal_bar(
+                        label="15m",
+                        interval_ms=900_000,
+                        window_minutes=15,
+                        rules=self._rules_15m,
+                        closed_open_ms=s15.closed_open_ms,
+                        signal_t=s15.i_closed,
+                        opens_ms=s15.opens_ms,
+                        o=s15.o,
+                        hi=s15.hi,
+                        lo=s15.lo,
+                        c=s15.c,
+                        v=s15.v,
+                    )
+                    self._watermark_15m = s15.closed_open_ms
             except Exception:
                 _LOG.exception("SHAMAN loop_error (continuing)")
             time.sleep(max(0.2, min(2.0, float(self.config.poll_interval_seconds))))
