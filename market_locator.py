@@ -156,6 +156,22 @@ class GammaMarketLocator:
                 token_id=str(tid), outcome=str(name),
                 end_time=end_time,
                 enable_order_book=bool(market.get("enableOrderBook", True)),
+                minimum_tick_size=str(
+                    market.get("minimum_tick_size")
+                    or market.get("minimumTickSize")
+                    or ""
+                ).strip()
+                or None,
+                neg_risk=bool(
+                    market.get("neg_risk")
+                    if market.get("neg_risk") is not None
+                    else market.get("negRisk")
+                )
+                if (
+                    market.get("neg_risk") is not None
+                    or market.get("negRisk") is not None
+                )
+                else None,
             )
             upper = str(name).strip().upper()
             if upper == "UP":

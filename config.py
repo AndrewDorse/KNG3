@@ -636,6 +636,8 @@ class TokenMarket:
     outcome: str
     end_time: datetime
     enable_order_book: bool
+    minimum_tick_size: str | None = None
+    neg_risk: bool | None = None
 
 
 @dataclass(slots=True)

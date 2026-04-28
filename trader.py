@@ -18,6 +18,7 @@ from py_clob_client.clob_types import (
     OpenOrderParams,
     OrderArgs,
     OrderType,
+    PartialCreateOrderOptions,
 )
 
 from config import (
@@ -30,6 +31,13 @@ _ORDER_VERSION_MISMATCH_SNIPPET = "order_version_mismatch"
 
 def _is_order_version_mismatch_error(exc: Exception) -> bool:
     return _ORDER_VERSION_MISMATCH_SNIPPET in str(exc).lower()
+
+
+def _normalized_tick_size(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    s = str(raw).strip()
+    return s if s in {"0.1", "0.01", "0.001", "0.0001"} else None
 
 
 def _clob_taker_size_shares(size: float) -> float:
@@ -69,26 +77,8 @@ class PolymarketTrader:
     def __init__(self, config: BotConfig):
         self.config = config
 
-        # --- Build CLOB client ---
-        self.client = ClobClient(
-            HOST,
-            chain_id=CHAIN_ID,
-            key=config.private_key,
-            signature_type=config.signature_type,
-            funder=config.funder,
-        )
-
-        # --- API credentials (relayer keys or derive) ---
-        if config.relayer_api_key:
-            from py_clob_client.clob_types import ApiCreds
-            creds = ApiCreds(
-                api_key=config.relayer_api_key,
-                api_secret=config.relayer_secret or "",
-                api_passphrase=config.relayer_passphrase or "",
-            )
-        else:
-            creds = self.client.create_or_derive_api_creds()
-        self.client.set_api_creds(creds)
+        self.client = self._new_client()
+        self._set_client_api_creds(prefer_env=True)
         LOGGER.info("API credentials set for funder: %s", config.funder)
 
         # One taker pipeline at a time: FAK POST + confirm + retries must finish (or raise)
@@ -101,6 +91,37 @@ class PolymarketTrader:
     # ------------------------------------------------------------------
     # Initialization helpers
     # ------------------------------------------------------------------
+    def _new_client(self) -> ClobClient:
+        return ClobClient(
+            HOST,
+            chain_id=CHAIN_ID,
+            key=self.config.private_key,
+            signature_type=self.config.signature_type,
+            funder=self.config.funder,
+        )
+
+    def _set_client_api_creds(self, *, prefer_env: bool) -> None:
+        from py_clob_client.clob_types import ApiCreds
+
+        if prefer_env and self.config.relayer_api_key:
+            creds = ApiCreds(
+                api_key=self.config.relayer_api_key,
+                api_secret=self.config.relayer_secret or "",
+                api_passphrase=self.config.relayer_passphrase or "",
+            )
+            self.client.set_api_creds(creds)
+            return
+        # For mismatch recovery, force a fresh derive/create sequence from signer.
+        try:
+            creds = self.client.derive_api_key()
+            if creds is None:
+                raise RuntimeError("derive_api_key returned None")
+        except Exception:
+            creds = self.client.create_api_key(int(time.time() * 1000))
+            if creds is None:
+                raise RuntimeError("create_api_key returned None")
+        self.client.set_api_creds(creds)
+
 
     def _setup_allowances(self) -> None:
         """Sync USDC collateral allowance with the CLOB (newer SDK) or legacy on-chain setup."""
@@ -124,9 +145,53 @@ class PolymarketTrader:
 
     def _refresh_api_creds(self) -> None:
         """Refresh L2 API credentials from wallet signer (used on version/auth drift errors)."""
-        creds = self.client.create_or_derive_api_creds()
-        self.client.set_api_creds(creds)
-        LOGGER.info("Refreshed API credentials for funder: %s", self.config.funder)
+        self.client = self._new_client()
+        self._set_client_api_creds(prefer_env=False)
+        LOGGER.info("Rebuilt client and refreshed API credentials for funder: %s", self.config.funder)
+        try:
+            self._setup_allowances()
+        except Exception as exc:
+            LOGGER.warning("Allowance re-sync after API refresh failed: %s", exc)
+
+    def _market_order_options_for_token(self, token: TokenMarket) -> PartialCreateOrderOptions | None:
+        """
+        Build market-order options required by newer Polymarket CLOB versions.
+        Prefer authoritative CLOB metadata for this token (tick_size/neg_risk),
+        fallback to Gamma snapshot fields only if CLOB metadata calls fail.
+        """
+        tick: str | None = None
+        neg: bool | None = None
+        try:
+            tick = _normalized_tick_size(self.client.get_tick_size(token.token_id))
+        except Exception:
+            tick = _normalized_tick_size(getattr(token, "minimum_tick_size", None))
+        try:
+            neg = bool(self.client.get_neg_risk(token.token_id))
+        except Exception:
+            neg = getattr(token, "neg_risk", None)
+        # Both fields are optional in SDK options. If both unavailable, omit options entirely.
+        if tick is None and neg is None:
+            LOGGER.warning(
+                "Missing tick_size/neg_risk for token %s; market order options omitted",
+                token.token_id[:20] + "…",
+            )
+            return None
+        return PartialCreateOrderOptions(
+            tick_size=tick,
+            neg_risk=bool(neg) if neg is not None else None,
+        )
+
+    def _create_and_post_market_order(
+        self, margs: MarketOrderArgs, options: PartialCreateOrderOptions | None
+    ) -> dict[str, Any]:
+        """
+        Prefer SDK's atomic create+post method when present; fallback to legacy two-step.
+        """
+        create_and_post = getattr(self.client, "create_and_post_market_order", None)
+        if callable(create_and_post):
+            return create_and_post(margs, options=options)
+        signed = self.client.create_market_order(margs, options=options)
+        return self.client.post_order(signed, margs.order_type or OrderType.FOK)
 
     # ------------------------------------------------------------------
     # Balance checks
@@ -337,6 +402,7 @@ class PolymarketTrader:
         last_exc: Exception | None = None
         refreshed_creds = False
         for attempt in range(1, max_attempts + 1):
+            opts = self._market_order_options_for_token(token)
             margs = MarketOrderArgs(
                 token_id=token.token_id,
                 amount=u,
@@ -346,9 +412,8 @@ class PolymarketTrader:
             )
             if fee_rate_bps is not None:
                 margs.fee_rate_bps = fee_rate_bps
-            signed = self.client.create_market_order(margs, options=None)
             try:
-                return self.client.post_order(signed, OrderType.FAK)
+                return self._create_and_post_market_order(margs, options=opts)
             except Exception as exc:
                 last_exc = exc
                 if attempt < max_attempts and _is_order_version_mismatch_error(exc):
@@ -407,6 +472,7 @@ class PolymarketTrader:
         raw: dict[str, Any] | None = None
         limit_px = 0.0
         for attempt in range(1, max_attempts + 1):
+            opts = self._market_order_options_for_token(token)
             margs = MarketOrderArgs(
                 token_id=token.token_id,
                 amount=u,
@@ -416,10 +482,9 @@ class PolymarketTrader:
             )
             if fee_rate_bps is not None:
                 margs.fee_rate_bps = fee_rate_bps
-            signed = self.client.create_market_order(margs, options=None)
             limit_px = float(margs.price)
             try:
-                raw = self.client.post_order(signed, OrderType.FAK)
+                raw = self._create_and_post_market_order(margs, options=opts)
                 break
             except Exception as exc:
                 last_exc = exc
