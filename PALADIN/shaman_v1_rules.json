@@ -1462,5 +1462,109 @@
     "pred": "R",
     "wr": 0.75,
     "n": 8
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=GGG&tr12=U&tr24=D",
+    "pred": "R",
+    "wr": 0.71875,
+    "n": 32
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=RGR&tr24=D&body=S",
+    "pred": "G",
+    "wr": 0.66667,
+    "n": 69
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=RRR&rng=W&body=M",
+    "pred": "G",
+    "wr": 0.67532,
+    "n": 77
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=RRG&rng=W&body=M",
+    "pred": "R",
+    "wr": 0.66154,
+    "n": 65
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg2=GR&tr24=D&body=S",
+    "pred": "G",
+    "wr": 0.65041,
+    "n": 123
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=RGR&tr12=F&tr24=U",
+    "pred": "R",
+    "wr": 0.63529,
+    "n": 85
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=GGR&vr=D&body=L",
+    "pred": "G",
+    "wr": 0.62941,
+    "n": 170
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=GGR&tr12=D&body=L",
+    "pred": "G",
+    "wr": 0.62810,
+    "n": 121
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=GRR&tr6=U&tr24=D",
+    "pred": "R",
+    "wr": 0.64865,
+    "n": 37
+  },
+  {
+    "timeframe": "5m",
+    "family": "N_combo3",
+    "pattern_key": "rg3=GGR&rng=n&tr6=U",
+    "pred": "R",
+    "wr": 0.63359,
+    "n": 131
+  },
+  {
+    "timeframe": "15m",
+    "family": "N15_combo3",
+    "pattern_key": "rg2=GG&vr=N&tr4=D",
+    "pred": "G",
+    "wr": 0.8333,
+    "n": 24
+  },
+  {
+    "timeframe": "15m",
+    "family": "N15_combo3",
+    "pattern_key": "rg3=GRG&tr16=D&body=M",
+    "pred": "G",
+    "wr": 0.7353,
+    "n": 34
+  },
+  {
+    "timeframe": "15m",
+    "family": "N15_combo3",
+    "pattern_key": "rg3=GGR&rng=W&tr8=D",
+    "pred": "G",
+    "wr": 0.7250,
+    "n": 40
   }
 ]

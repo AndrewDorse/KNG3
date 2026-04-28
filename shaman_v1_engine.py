@@ -220,6 +220,7 @@ class _Pending:
     entry_limit_px: float
     token_id: str | None
     slug: str
+    winning_signals: list[tuple[str, float]]
 
 
 class ShamanV1Engine:
@@ -268,8 +269,7 @@ class ShamanV1Engine:
         except Exception as exc:
             bal_s = f"error:{exc!r}"
         _LOG.info(
-            "INIT version=%s dry_run=%s (if true: Polymarket orders are NOT sent; set POLY_DRY_RUN=false for live) "
-            "wallet_usdc=%s rules_5m=%d rules_15m=%d "
+            "INIT version=%s dry_run=%s wallet_usdc=%s rules_5m=%d rules_15m=%d "
             "order_usdc=$%.2f_if_1_signal_else_$%.2f_each max=$%.2f btc=%s poll_s=%.2f",
             self.config.bot_version,
             self.config.dry_run,
@@ -291,45 +291,18 @@ class ShamanV1Engine:
         act: str | None,
         late: bool,
     ) -> None:
+        lbl = label.upper()
         if pending.pred is None:
-            match = "NO_SIGNAL"
-        elif act is None:
-            match = "N/A"
-        elif act == pending.pred:
-            match = "RIGHT"
+            _LOG.info("WINDOW END %s - NO SIGNALS", lbl)
+            return
+        if act is None:
+            _LOG.info("WINDOW END %s - NO SIGNALS", lbl)
+            return
+        if act == "G":
+            right, wrong = pending.n_g, pending.n_r
         else:
-            match = "WRONG"
-
-        pnl_part = ""
-        if self.config.dry_run and pending.pred is not None and pending.shares > 1e-9 and pending.token_id and pending.entry_ask is not None:
-            bid = self.trader.get_best_bid(pending.token_id)
-            if bid is not None and bid > 0:
-                pnl = pending.shares * (float(bid) - float(pending.entry_ask))
-                pnl_part = f" dry_pnl_usdc={pnl:+.4f} exit_bid={bid:.2f} entry_ask={pending.entry_ask:.2f} sh={pending.shares}"
-            else:
-                pnl_part = " dry_pnl_usdc=N/A (no bid)"
-        elif not self.config.dry_run:
-            pnl_part = " pnl=live_not_marked_in_logs"
-        elif self.config.dry_run:
-            if pending.pred is None:
-                pnl_part = " dry_pnl_usdc=N/A (no_signal)"
-            elif pending.shares <= 0:
-                pnl_part = " dry_pnl_usdc=N/A (no_clip)"
-
-        late_tag = " late_tick=1" if late else ""
-        _LOG.info(
-            "%s WINDOW_END target_open_ms=%s actual_binance=%s pred=%s match=%s nG=%d nR=%d pm_side=%s%s%s",
-            label,
-            pending.target_bar_open_ms,
-            act or "DOJI",
-            pending.pred or "NONE",
-            match,
-            pending.n_g,
-            pending.n_r,
-            pending.pm_side or "NONE",
-            pnl_part,
-            late_tag,
-        )
+            right, wrong = pending.n_r, pending.n_g
+        _LOG.info("WINDOW END %s - %d RIGHT (%d WRONG)", lbl, right, wrong)
 
     def _resolve_pending_for_closed_bar(
         self,
@@ -344,24 +317,12 @@ class ShamanV1Engine:
         if pending is None:
             return None
         if pending.target_bar_open_ms > closed_open_ms:
-            _LOG.info(
-                "%s WINDOW sync_reset target_open_ms=%s > api_last_closed_open_ms=%s (dropping stale pending)",
-                label,
-                pending.target_bar_open_ms,
-                closed_open_ms,
-            )
             return None
         late = pending.target_bar_open_ms < closed_open_ms
         ix = _index_open_ms(opens_ms, pending.target_bar_open_ms)
         act = _binance_rg(ix, o, c) if ix is not None and 0 <= ix < len(o) else None
         if ix is None:
-            _LOG.info(
-                "%s WINDOW_END target_open_ms=%s actual_binance=N/A pred=%s match=N/A "
-                "(target not in kline buffer; widen BOT_SHAMAN_V1_KLINE_LIMIT)",
-                label,
-                pending.target_bar_open_ms,
-                pending.pred or "NONE",
-            )
+            _LOG.error("WINDOW END %s - NO SIGNALS", label.upper())
         else:
             self._emit_end(label=label, pending=pending, act=act, late=late)
         return None
@@ -393,12 +354,35 @@ class ShamanV1Engine:
         _candle = _binance_rg(t, o, c)
         candle_s = "X" if _candle is None else _candle
         ng, nr = self._aggregate_at_t(rules, o, hi, lo, c, v, t)
+        aux = _eval_mod._build_aux(o, c, v, hi, lo)  # noqa: SLF001
+        matched = []
+        for r in rules:
+            if _eval_mod.match_rule(  # noqa: SLF001
+                str(r.get("family", "")),
+                str(r.get("pattern_key", "")),
+                o,
+                c,
+                v,
+                hi,
+                lo,
+                t,
+                aux=aux,
+            ):
+                matched.append(r)
         if ng > nr:
             pred, win_side, winning = "G", "UP", ng
         elif nr > ng:
             pred, win_side, winning = "R", "DOWN", nr
         else:
             pred, win_side, winning = None, None, 0
+        losing = nr if pred == "G" else ng if pred == "R" else 0
+        losing_side = "DOWN" if pred == "G" else "UP" if pred == "R" else ""
+        winning_rules = [r for r in matched if str(r.get("pred", "")) == pred] if pred is not None else []
+        winning_signal_lines: list[tuple[str, float]] = []
+        for r in winning_rules:
+            nm = f"{r.get('family','')}|{r.get('pattern_key','')}"
+            wr = float(r.get("wr", 0.0) or 0.0)
+            winning_signal_lines.append((nm, wr))
 
         notional = _notional_usdc(winning, self.config) if pred is not None else 0.0
         next_open_ms = closed_open_ms + interval_ms
@@ -483,53 +467,18 @@ class ShamanV1Engine:
                         action = "PM_skip notional<=0"
                 else:
                     action = "PM_skip no_ask"
-                    if not self.config.dry_run:
-                        _LOG.warning(
-                            "SHAMAN_NO_ASK: signal=%s nG=%d nR=%d side=%s notional=%.2f — CLOB has no ask "
-                            "(empty book or no sell-side liquidity) token=%s slug=%s",
-                            label,
-                            ng,
-                            nr,
-                            win_side,
-                            notional,
-                            (tok.token_id[:20] + "…")
-                            if tok and getattr(tok, "token_id", None)
-                            else "?",
-                            slug,
-                        )
             else:
                 action = f"PM_skip cutoff rem_s={rem:.1f} (cutoff_s={cutoff:.0f})"
-                if not self.config.dry_run and pred is not None:
-                    _LOG.warning(
-                        "SHAMAN_CUTOFF: %s nG=%d nR=%d notional=%.2f rem=%.1fs (no new orders in last %.0fs of window) slug=%s",
-                        label,
-                        ng,
-                        nr,
-                        notional,
-                        rem,
-                        cutoff,
-                        slug,
-                    )
         elif pred is not None:
             action = "PM_skip no_contract"
-            if not self.config.dry_run:
-                _LOG.warning(
-                    "SHAMAN_NO_CONTRACT: %s nG=%d nR=%d — Gamma has no market for this %dm window (check slug / API)",
-                    label,
-                    ng,
-                    nr,
-                    window_minutes,
-                )
 
-        _LOG.info(
-            "%s WINDOW_START pm_window=%dm closed_signal_open_ms=%s next_bar_open_ms=%s %s | %s",
-            label,
-            window_minutes,
-            closed_open_ms,
-            next_open_ms,
-            sig_part,
-            action,
-        )
+        lbl = label.upper()
+        if pred is None:
+            _LOG.info("WINDOW START %s - NO SIGNALS", lbl)
+        else:
+            _LOG.info("WINDOW START %s - %d %s (%d%s)", lbl, winning, win_side, losing, losing_side)
+            for nm, wr in winning_signal_lines:
+                _LOG.info("%s %d%% wr", nm, int(round(wr * 100.0)))
 
         return _Pending(
             label=label,
@@ -545,6 +494,7 @@ class ShamanV1Engine:
             entry_limit_px=entry_limit_px,
             token_id=token_id,
             slug=slug,
+            winning_signals=winning_signal_lines,
         )
 
     def _snapshot_interval(
@@ -564,7 +514,7 @@ class ShamanV1Engine:
                 float(self.config.request_timeout_seconds),
             )
         except Exception as exc:
-            _LOG.info("%s poll_binance_error err=%s (will retry)", label, exc)
+            _LOG.error("%s poll_binance_error err=%s", label, exc)
             return None
 
         if len(o) < 50 or len(opens_ms) < 3:

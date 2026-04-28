@@ -75,6 +75,67 @@ def _range_bucket(i: int, aux: dict[str, Any]) -> str:
     return "W"
 
 
+def _trend_bucket(i: int, c: list[float], lookback: int) -> str:
+    if i < lookback:
+        return "F"
+    ret = (c[i] - c[i - lookback]) / max(c[i - lookback], 1e-12)
+    if lookback <= 6:
+        th = 0.0008
+    elif lookback <= 12:
+        th = 0.0015
+    else:
+        th = 0.0025
+    if ret > th:
+        return "U"
+    if ret < -th:
+        return "D"
+    return "F"
+
+
+def _vol_regime_bucket(i: int, v: list[float], aux: dict[str, Any]) -> str:
+    vm = aux["vol_ma"][i]
+    if vm <= 1e-12:
+        return "N"
+    r = v[i] / vm
+    if r < 0.7:
+        return "D"
+    if r > 1.5:
+        return "S"
+    return "N"
+
+
+def _combo_feature_value(name: str, i: int, o: list[float], c: list[float], v: list[float], aux: dict[str, Any]) -> str | None:
+    if name == "rg2":
+        if i < 1:
+            return None
+        a, b = _rg(i - 1, o, c), _rg(i, o, c)
+        if a is None or b is None:
+            return None
+        return f"{a}{b}"
+    if name == "rg3":
+        if i < 2:
+            return None
+        a, b, d = _rg(i - 2, o, c), _rg(i - 1, o, c), _rg(i, o, c)
+        if a is None or b is None or d is None:
+            return None
+        return f"{a}{b}{d}"
+    if name == "rng":
+        return _range_bucket(i, aux)
+    if name == "vr":
+        return _vol_regime_bucket(i, v, aux)
+    if name == "tr6":
+        return _trend_bucket(i, c, 6)
+    if name == "tr12":
+        return _trend_bucket(i, c, 12)
+    if name == "tr24":
+        return _trend_bucket(i, c, 24)
+    if name == "color":
+        return _rg(i, o, c)
+    if name == "body":
+        return _body_bucket(i, aux)
+    return None
+
+
 def _token(i: int, o: list[float], c: list[float], v: list[float], aux: dict[str, Any]) -> str | None:
     x = _rg(i, o, c)
     if x is None:
@@ -169,6 +230,21 @@ def match_rule(
         if _token(t, o, c, v, aux) != last:
             return False
         return _range_bucket(t, aux) == rng_need
+
+    if family in {"M_combo2", "N_combo3", "M15_combo2", "N15_combo3"}:
+        parts = [p for p in pattern_key.split("&") if p]
+        if family in {"M_combo2", "M15_combo2"} and len(parts) != 2:
+            return False
+        if family in {"N_combo3", "N15_combo3"} and len(parts) != 3:
+            return False
+        for p in parts:
+            if "=" not in p:
+                return False
+            name, expect = p.split("=", 1)
+            got = _combo_feature_value(name.strip(), t, o, c, v, aux)
+            if got is None or got != expect.strip():
+                return False
+        return True
 
     return False
 
