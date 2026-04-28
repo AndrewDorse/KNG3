@@ -1524,7 +1524,7 @@
     "family": "N_combo3",
     "pattern_key": "rg3=GGR&tr12=D&body=L",
     "pred": "G",
-    "wr": 0.62810,
+    "wr": 0.6281,
     "n": 121
   },
   {
@@ -1564,7 +1564,231 @@
     "family": "N15_combo3",
     "pattern_key": "rg3=GGR&rng=W&tr8=D",
     "pred": "G",
-    "wr": 0.7250,
+    "wr": 0.725,
     "n": 40
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=M&rg4=GGRG&tr32=D&tr4=F",
+    "pred": "G",
+    "wr": 0.9091,
+    "n": 11
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo3",
+    "pattern_key": "body=S&rg3=GGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=S&rg2=GG&rg4=RGGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo3",
+    "pattern_key": "body=S&rg4=RGGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=S&rg2=GG&rg3=GGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=S&rg3=GGG&rg4=RGGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=S&color=G&rg4=RGGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "body=S&color=G&rg3=GGG&tr4=D",
+    "pred": "G",
+    "wr": 0.9,
+    "n": 10
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo3",
+    "pattern_key": "rg4=RRRG&tr32=D&tr8=U",
+    "pred": "R",
+    "wr": 0.875,
+    "n": 16
+  },
+  {
+    "timeframe": "15m",
+    "family": "Z15_combo4",
+    "pattern_key": "rg3=RRG&rg4=RRRG&tr32=D&tr8=U",
+    "pred": "R",
+    "wr": 0.875,
+    "n": 16
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=S&rg4=RGGR&tr24=D&tr48=D&tr6=D",
+    "pred": "G",
+    "wr": 0.9286,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=M&rg4=RRGG&rng=w&tr48=D&vr=N",
+    "pred": "R",
+    "wr": 0.875,
+    "n": 16
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=M&rg4=RGGR&rng=w&tr48=D&tr6=F",
+    "pred": "R",
+    "wr": 0.8571,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=S&rg2=RG&rng=n&tr24=U&vr=S",
+    "pred": "R",
+    "wr": 0.8571,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=S&rg4=RGGR&tr12=D&tr24=D&tr6=D",
+    "pred": "G",
+    "wr": 0.85,
+    "n": 20
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "body=M&rg2=RG&rng=W&tr24=F&vr=N",
+    "pred": "R",
+    "wr": 0.8333,
+    "n": 24
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "rg4=GGGR&tr12=U&tr24=D&tr6=U&vr=D",
+    "pred": "G",
+    "wr": 0.8333,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg4=GGRR&rng=n&tr6=F&vr=S",
+    "pred": "G",
+    "wr": 0.8333,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "rg2=RR&rg4=GGRR&rng=n&tr6=F&vr=S",
+    "pred": "G",
+    "wr": 0.8333,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo5",
+    "pattern_key": "rg3=GRR&rg4=GGRR&rng=n&tr6=F&vr=S",
+    "pred": "G",
+    "wr": 0.8333,
+    "n": 14
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "body=S&rg4=RGGR&tr48=D&tr6=D",
+    "pred": "G",
+    "wr": 0.8095,
+    "n": 21
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "body=M&rg4=GRGR&rng=W&tr48=D",
+    "pred": "G",
+    "wr": 0.7826,
+    "n": 23
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg4=RGRR&rng=n&tr12=F&tr6=U",
+    "pred": "R",
+    "wr": 0.7647,
+    "n": 17
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg4=RRRG&tr24=U&tr48=F&tr6=U",
+    "pred": "R",
+    "wr": 0.7619,
+    "n": 21
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg4=GGGR&tr12=U&tr24=D&vr=D",
+    "pred": "G",
+    "wr": 0.7619,
+    "n": 21
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg3=GGR&tr24=D&tr48=F&vr=S",
+    "pred": "G",
+    "wr": 0.75,
+    "n": 20
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "body=S&rg4=RGGR&tr12=D&tr48=D",
+    "pred": "G",
+    "wr": 0.75,
+    "n": 32
+  },
+  {
+    "timeframe": "5m",
+    "family": "Z5_combo4",
+    "pattern_key": "rg4=GGGR&rng=n&tr12=U&tr48=D",
+    "pred": "G",
+    "wr": 0.75,
+    "n": 21
   }
 ]

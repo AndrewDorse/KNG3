@@ -220,7 +220,43 @@ class _Pending:
     entry_limit_px: float
     token_id: str | None
     slug: str
-    winning_signals: list[tuple[str, float]]
+
+
+def _rule_wr_recent(
+    *,
+    rule: dict[str, Any],
+    o: list[float],
+    c: list[float],
+    hi: list[float],
+    lo: list[float],
+    v: list[float],
+    t_end: int,
+    bars: int,
+) -> tuple[float | None, int]:
+    """Trailing WR for one rule up to ``t_end`` (known history only)."""
+    if t_end <= 50:
+        return None, 0
+    t_lo = max(50, t_end - bars + 1)
+    t_hi = min(t_end - 1, len(o) - 2)  # t+1 outcome must exist
+    if t_hi < t_lo:
+        return None, 0
+    aux = _eval_mod._build_aux(o, c, v, hi, lo)  # noqa: SLF001
+    wins = hits = 0
+    fam = str(rule.get("family", ""))
+    pk = str(rule.get("pattern_key", ""))
+    pr = str(rule.get("pred", ""))
+    for tt in range(t_lo, t_hi + 1):
+        if not _eval_mod.match_rule(fam, pk, o, c, v, hi, lo, tt, aux=aux):  # noqa: SLF001
+            continue
+        act = _binance_rg(tt + 1, o, c)
+        if act is None:
+            continue
+        hits += 1
+        if act == pr:
+            wins += 1
+    if hits <= 0:
+        return None, 0
+    return wins / hits, hits
 
 
 class ShamanV1Engine:
@@ -378,11 +414,23 @@ class ShamanV1Engine:
         losing = nr if pred == "G" else ng if pred == "R" else 0
         losing_side = "DOWN" if pred == "G" else "UP" if pred == "R" else ""
         winning_rules = [r for r in matched if str(r.get("pred", "")) == pred] if pred is not None else []
-        winning_signal_lines: list[tuple[str, float]] = []
+        bars_per_day = 288 if int(interval_ms) == 300_000 else 96
+        winning_signal_lines: list[str] = []
         for r in winning_rules:
             nm = f"{r.get('family','')}|{r.get('pattern_key','')}"
-            wr = float(r.get("wr", 0.0) or 0.0)
-            winning_signal_lines.append((nm, wr))
+            wr7, h7 = _rule_wr_recent(
+                rule=r, o=o, c=c, hi=hi, lo=lo, v=v, t_end=t - 1, bars=7 * bars_per_day
+            )
+            wr1m, h1m = _rule_wr_recent(
+                rule=r, o=o, c=c, hi=hi, lo=lo, v=v, t_end=t - 1, bars=30 * bars_per_day
+            )
+            wr2m, h2m = _rule_wr_recent(
+                rule=r, o=o, c=c, hi=hi, lo=lo, v=v, t_end=t - 1, bars=60 * bars_per_day
+            )
+            s7 = "NA" if wr7 is None else f"{wr7*100:.0f}%/{h7}"
+            s1m = "NA" if wr1m is None else f"{wr1m*100:.0f}%/{h1m}"
+            s2m = "NA" if wr2m is None else f"{wr2m*100:.0f}%/{h2m}"
+            winning_signal_lines.append(f"{nm}[7d:{s7},1m:{s1m},2m:{s2m}]")
 
         notional = _notional_usdc(winning, self.config) if pred is not None else 0.0
         next_open_ms = closed_open_ms + interval_ms
@@ -476,9 +524,16 @@ class ShamanV1Engine:
         if pred is None:
             _LOG.info("WINDOW START %s - NO SIGNALS", lbl)
         else:
-            _LOG.info("WINDOW START %s - %d %s (%d%s)", lbl, winning, win_side, losing, losing_side)
-            for nm, wr in winning_signal_lines:
-                _LOG.info("%s %d%% wr", nm, int(round(wr * 100.0)))
+            sig_blob = "; ".join(winning_signal_lines) if winning_signal_lines else "NONE"
+            _LOG.info(
+                "WINDOW START %s - %d %s (%d%s) | %s",
+                lbl,
+                winning,
+                win_side,
+                losing,
+                losing_side,
+                sig_blob,
+            )
 
         return _Pending(
             label=label,
@@ -494,7 +549,6 @@ class ShamanV1Engine:
             entry_limit_px=entry_limit_px,
             token_id=token_id,
             slug=slug,
-            winning_signals=winning_signal_lines,
         )
 
     def _snapshot_interval(

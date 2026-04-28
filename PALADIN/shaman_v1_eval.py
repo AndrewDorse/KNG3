@@ -119,16 +119,33 @@ def _combo_feature_value(name: str, i: int, o: list[float], c: list[float], v: l
         if a is None or b is None or d is None:
             return None
         return f"{a}{b}{d}"
+    if name == "rg4":
+        if i < 3:
+            return None
+        a, b, d, e = _rg(i - 3, o, c), _rg(i - 2, o, c), _rg(i - 1, o, c), _rg(i, o, c)
+        if a is None or b is None or d is None or e is None:
+            return None
+        return f"{a}{b}{d}{e}"
     if name == "rng":
         return _range_bucket(i, aux)
     if name == "vr":
         return _vol_regime_bucket(i, v, aux)
+    if name == "tr4":
+        return _trend_bucket(i, c, 4)
+    if name == "tr8":
+        return _trend_bucket(i, c, 8)
+    if name == "tr16":
+        return _trend_bucket(i, c, 16)
     if name == "tr6":
         return _trend_bucket(i, c, 6)
     if name == "tr12":
         return _trend_bucket(i, c, 12)
     if name == "tr24":
         return _trend_bucket(i, c, 24)
+    if name == "tr32":
+        return _trend_bucket(i, c, 32)
+    if name == "tr48":
+        return _trend_bucket(i, c, 48)
     if name == "color":
         return _rg(i, o, c)
     if name == "body":
@@ -231,11 +248,19 @@ def match_rule(
             return False
         return _range_bucket(t, aux) == rng_need
 
-    if family in {"M_combo2", "N_combo3", "M15_combo2", "N15_combo3"}:
+    if family in {
+        "M_combo2", "N_combo3", "M15_combo2", "N15_combo3",
+        "Z5_combo2", "Z5_combo3", "Z5_combo4", "Z5_combo5",
+        "Z15_combo2", "Z15_combo3", "Z15_combo4", "Z15_combo5",
+    }:
         parts = [p for p in pattern_key.split("&") if p]
-        if family in {"M_combo2", "M15_combo2"} and len(parts) != 2:
+        if family in {"M_combo2", "M15_combo2", "Z5_combo2", "Z15_combo2"} and len(parts) != 2:
             return False
-        if family in {"N_combo3", "N15_combo3"} and len(parts) != 3:
+        if family in {"N_combo3", "N15_combo3", "Z5_combo3", "Z15_combo3"} and len(parts) != 3:
+            return False
+        if family in {"Z5_combo4", "Z15_combo4"} and len(parts) != 4:
+            return False
+        if family in {"Z5_combo5", "Z15_combo5"} and len(parts) != 5:
             return False
         for p in parts:
             if "=" not in p:
