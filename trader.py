@@ -10,16 +10,38 @@ from functools import wraps
 from typing import Any
 
 import requests
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import (
-    AssetType,
-    BalanceAllowanceParams,
-    MarketOrderArgs,
-    OpenOrderParams,
-    OrderArgs,
-    OrderType,
-    PartialCreateOrderOptions,
-)
+
+_CLOB_V2 = False
+try:
+    from py_clob_client_v2 import (
+        ApiCreds,
+        AssetType,
+        BalanceAllowanceParams,
+        ClobClient,
+        MarketOrderArgs,
+        OpenOrderParams,
+        OrderArgs,
+        OrderPayload,
+        OrderType,
+        PartialCreateOrderOptions,
+        Side,
+    )
+    _CLOB_V2 = True
+except Exception:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import (
+        ApiCreds,
+        AssetType,
+        BalanceAllowanceParams,
+        MarketOrderArgs,
+        OpenOrderParams,
+        OrderArgs,
+        OrderType,
+        PartialCreateOrderOptions,
+    )
+
+    Side = None
+    OrderPayload = None
 
 from config import (
     HOST, CHAIN_ID, BUY, SELL, LOGGER,
@@ -76,10 +98,16 @@ class PolymarketTrader:
 
     def __init__(self, config: BotConfig):
         self.config = config
+        self._buy_side = Side.BUY if _CLOB_V2 and Side is not None else BUY
+        self._sell_side = Side.SELL if _CLOB_V2 and Side is not None else SELL
 
         self.client = self._new_client()
         self._set_client_api_creds(prefer_env=True)
-        LOGGER.info("API credentials set for funder: %s", config.funder)
+        LOGGER.info(
+            "API credentials set for funder: %s (CLOB client: %s)",
+            config.funder,
+            "v2" if _CLOB_V2 else "v1",
+        )
 
         # One taker pipeline at a time: FAK POST + confirm + retries must finish (or raise)
         # before another marketable order is sent — avoids overlap when the CLOB is slow.
@@ -101,8 +129,6 @@ class PolymarketTrader:
         )
 
     def _set_client_api_creds(self, *, prefer_env: bool) -> None:
-        from py_clob_client.clob_types import ApiCreds
-
         if prefer_env and self.config.relayer_api_key:
             creds = ApiCreds(
                 api_key=self.config.relayer_api_key,
@@ -125,7 +151,7 @@ class PolymarketTrader:
 
     def _setup_allowances(self) -> None:
         """Sync USDC collateral allowance with the CLOB (newer SDK) or legacy on-chain setup."""
-        if hasattr(self.client, "set_allowances"):
+        if hasattr(self.client, "set_allowances") and not _CLOB_V2:
             try:
                 self.client.set_allowances(signature_type=self.config.signature_type)
                 LOGGER.info("Allowances set successfully (set_allowances)")
@@ -189,7 +215,10 @@ class PolymarketTrader:
         """
         create_and_post = getattr(self.client, "create_and_post_market_order", None)
         if callable(create_and_post):
-            return create_and_post(margs, options=options)
+            try:
+                return create_and_post(margs, options=options, order_type=(margs.order_type or OrderType.FOK))
+            except TypeError:
+                return create_and_post(margs, options=options)
         signed = self.client.create_market_order(margs, options=options)
         return self.client.post_order(signed, margs.order_type or OrderType.FOK)
 
@@ -280,11 +309,17 @@ class PolymarketTrader:
                 "token_id": token.token_id,
                 "price": round(price, 2),
                 "size": float(size),
-                "side": BUY,
+                "side": self._buy_side,
             }
-            if fee_rate_bps is not None:
+            if fee_rate_bps is not None and not _CLOB_V2:
                 order_kwargs["fee_rate_bps"] = fee_rate_bps
             order = OrderArgs(**order_kwargs)
+            create_and_post = getattr(self.client, "create_and_post_order", None)
+            if callable(create_and_post):
+                try:
+                    return create_and_post(order_args=order, options=None, order_type=OrderType.GTC, post_only=post_only)
+                except TypeError:
+                    return create_and_post(order, None, OrderType.GTC)
             signed = self.client.create_order(order)
             return self.client.post_order(signed, OrderType.GTC, post_only=post_only)
 
@@ -315,11 +350,17 @@ class PolymarketTrader:
             "token_id": token.token_id,
             "price": round(price, 2),
             "size": sz,
-            "side": BUY,
+            "side": self._buy_side,
         }
-        if fee_rate_bps is not None:
+        if fee_rate_bps is not None and not _CLOB_V2:
             order_kwargs["fee_rate_bps"] = fee_rate_bps
         order = OrderArgs(**order_kwargs)
+        create_and_post = getattr(self.client, "create_and_post_order", None)
+        if callable(create_and_post):
+            try:
+                return create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
+            except TypeError:
+                return create_and_post(order, None, OrderType.FAK)
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.FAK)
 
@@ -362,13 +403,20 @@ class PolymarketTrader:
             "token_id": token.token_id,
             "price": round(price, 2),
             "size": sz,
-            "side": BUY,
+            "side": self._buy_side,
         }
-        if fee_rate_bps is not None:
+        if fee_rate_bps is not None and not _CLOB_V2:
             order_kwargs["fee_rate_bps"] = fee_rate_bps
         order = OrderArgs(**order_kwargs)
-        signed = self.client.create_order(order)
-        raw = self.client.post_order(signed, OrderType.FAK)
+        create_and_post = getattr(self.client, "create_and_post_order", None)
+        if callable(create_and_post):
+            try:
+                raw = create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
+            except TypeError:
+                raw = create_and_post(order, None, OrderType.FAK)
+        else:
+            signed = self.client.create_order(order)
+            raw = self.client.post_order(signed, OrderType.FAK)
         return fak_buy_with_confirm(
             self.client.get_order,
             raw,
@@ -406,11 +454,11 @@ class PolymarketTrader:
             margs = MarketOrderArgs(
                 token_id=token.token_id,
                 amount=u,
-                side=BUY,
+                side=self._buy_side,
                 price=0.0,
                 order_type=OrderType.FAK,
             )
-            if fee_rate_bps is not None:
+            if fee_rate_bps is not None and hasattr(margs, "fee_rate_bps"):
                 margs.fee_rate_bps = fee_rate_bps
             try:
                 return self._create_and_post_market_order(margs, options=opts)
@@ -476,11 +524,11 @@ class PolymarketTrader:
             margs = MarketOrderArgs(
                 token_id=token.token_id,
                 amount=u,
-                side=BUY,
+                side=self._buy_side,
                 price=0.0,
                 order_type=OrderType.FAK,
             )
-            if fee_rate_bps is not None:
+            if fee_rate_bps is not None and hasattr(margs, "fee_rate_bps"):
                 margs.fee_rate_bps = fee_rate_bps
             limit_px = float(margs.price)
             try:
@@ -532,8 +580,14 @@ class PolymarketTrader:
             token_id=token.token_id,
             price=round(price, 2),
             size=float(size),
-            side=SELL,
+            side=self._sell_side,
         )
+        create_and_post = getattr(self.client, "create_and_post_order", None)
+        if callable(create_and_post):
+            try:
+                return create_and_post(order_args=order, options=None, order_type=OrderType.GTC, post_only=False)
+            except TypeError:
+                return create_and_post(order, None, OrderType.GTC)
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.GTC)
 
@@ -554,8 +608,14 @@ class PolymarketTrader:
             token_id=token.token_id,
             price=round(price, 2),
             size=_clob_taker_size_shares(size),
-            side=SELL,
+            side=self._sell_side,
         )
+        create_and_post = getattr(self.client, "create_and_post_order", None)
+        if callable(create_and_post):
+            try:
+                return create_and_post(order_args=order, options=None, order_type=OrderType.FAK, post_only=False)
+            except TypeError:
+                return create_and_post(order, None, OrderType.FAK)
         signed = self.client.create_order(order)
         return self.client.post_order(signed, OrderType.FAK)
 
@@ -566,6 +626,8 @@ class PolymarketTrader:
     def get_open_orders(self) -> list[dict[str, Any]]:
         """Fetch all currently open orders for this account."""
         try:
+            if hasattr(self.client, "get_open_orders"):
+                return self.client.get_open_orders(OpenOrderParams())
             return self.client.get_orders(OpenOrderParams())
         except Exception:
             return []
@@ -573,7 +635,10 @@ class PolymarketTrader:
     def cancel_order(self, order_id: str) -> bool:
         """Cancel a single order by ID. Returns True on success."""
         try:
-            self.client.cancel(order_id)
+            if hasattr(self.client, "cancel_order"):
+                self.client.cancel_order(OrderPayload(orderID=order_id))
+            else:
+                self.client.cancel(order_id)
             return True
         except Exception as exc:
             LOGGER.debug("Cancel failed %s: %s", order_id, exc)
