@@ -475,7 +475,7 @@ class ShamanV1Engine:
                                     "SHAMAN_ORDER_ERR %s: %s (CLOB creds, balance, allowance, or API)",
                                     label,
                                     last_exc,
-                                    exc_info=True,
+                                    exc_info=False,
                                 )
                         else:
                             action += " NO_SEND_POLY_DRY_RUN"

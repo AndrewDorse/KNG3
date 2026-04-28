@@ -122,6 +122,12 @@ class PolymarketTrader:
         except Exception as exc:
             LOGGER.warning("Allowance sync issue (may already be set on-chain): %s", exc)
 
+    def _refresh_api_creds(self) -> None:
+        """Refresh L2 API credentials from wallet signer (used on version/auth drift errors)."""
+        creds = self.client.create_or_derive_api_creds()
+        self.client.set_api_creds(creds)
+        LOGGER.info("Refreshed API credentials for funder: %s", self.config.funder)
+
     # ------------------------------------------------------------------
     # Balance checks
     # ------------------------------------------------------------------
@@ -329,6 +335,7 @@ class PolymarketTrader:
             raise ValueError("usdc must be > 0")
         max_attempts = 3
         last_exc: Exception | None = None
+        refreshed_creds = False
         for attempt in range(1, max_attempts + 1):
             margs = MarketOrderArgs(
                 token_id=token.token_id,
@@ -345,6 +352,12 @@ class PolymarketTrader:
             except Exception as exc:
                 last_exc = exc
                 if attempt < max_attempts and _is_order_version_mismatch_error(exc):
+                    if not refreshed_creds:
+                        try:
+                            self._refresh_api_creds()
+                            refreshed_creds = True
+                        except Exception as cred_exc:
+                            LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
                     LOGGER.warning(
                         "CLOB order_version_mismatch on market buy usdc; retrying %d/%d token=%s usdc=%.2f",
                         attempt + 1,
@@ -390,6 +403,7 @@ class PolymarketTrader:
             raise ValueError("usdc must be > 0")
         max_attempts = 3
         last_exc: Exception | None = None
+        refreshed_creds = False
         raw: dict[str, Any] | None = None
         limit_px = 0.0
         for attempt in range(1, max_attempts + 1):
@@ -410,6 +424,12 @@ class PolymarketTrader:
             except Exception as exc:
                 last_exc = exc
                 if attempt < max_attempts and _is_order_version_mismatch_error(exc):
+                    if not refreshed_creds:
+                        try:
+                            self._refresh_api_creds()
+                            refreshed_creds = True
+                        except Exception as cred_exc:
+                            LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
                     LOGGER.warning(
                         "CLOB order_version_mismatch on market buy usdc+confirm; retrying %d/%d token=%s usdc=%.2f",
                         attempt + 1,
