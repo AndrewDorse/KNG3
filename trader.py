@@ -49,6 +49,8 @@ from config import (
 )
 
 _ORDER_VERSION_MISMATCH_SNIPPET = "order_version_mismatch"
+_BUY_RETRY_DELAY_SECONDS = 2.0
+_BUY_RETRY_ATTEMPTS = 3
 
 
 def _is_order_version_mismatch_error(exc: Exception) -> bool:
@@ -222,6 +224,29 @@ class PolymarketTrader:
         signed = self.client.create_market_order(margs, options=options)
         return self.client.post_order(signed, margs.order_type or OrderType.FOK)
 
+    def _sleep_before_buy_retry(
+        self,
+        *,
+        attempt: int,
+        token: TokenMarket,
+        amount_hint: float | None,
+        reason: Exception,
+        context: str,
+    ) -> None:
+        if attempt >= _BUY_RETRY_ATTEMPTS:
+            return
+        LOGGER.warning(
+            "Buy order error (%s) token=%s amount=%.4f; retrying %d/%d in %.1fs: %s",
+            context,
+            token.token_id[:20] + "…",
+            float(amount_hint or 0.0),
+            attempt + 1,
+            _BUY_RETRY_ATTEMPTS,
+            _BUY_RETRY_DELAY_SECONDS,
+            reason,
+        )
+        time.sleep(_BUY_RETRY_DELAY_SECONDS)
+
     # ------------------------------------------------------------------
     # Balance checks
     # ------------------------------------------------------------------
@@ -346,23 +371,45 @@ class PolymarketTrader:
         fee_rate_bps: int | None = None,
     ) -> dict[str, Any]:
         sz = _clob_taker_size_shares(size)
-        order_kwargs: dict[str, Any] = {
-            "token_id": token.token_id,
-            "price": round(price, 2),
-            "size": sz,
-            "side": self._buy_side,
-        }
-        if fee_rate_bps is not None and not _CLOB_V2:
-            order_kwargs["fee_rate_bps"] = fee_rate_bps
-        order = OrderArgs(**order_kwargs)
-        create_and_post = getattr(self.client, "create_and_post_order", None)
-        if callable(create_and_post):
+        last_exc: Exception | None = None
+        refreshed_creds = False
+        for attempt in range(1, _BUY_RETRY_ATTEMPTS + 1):
+            order_kwargs: dict[str, Any] = {
+                "token_id": token.token_id,
+                "price": round(price, 2),
+                "size": sz,
+                "side": self._buy_side,
+            }
+            if fee_rate_bps is not None and not _CLOB_V2:
+                order_kwargs["fee_rate_bps"] = fee_rate_bps
+            order = OrderArgs(**order_kwargs)
+            create_and_post = getattr(self.client, "create_and_post_order", None)
             try:
-                return create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
-            except TypeError:
-                return create_and_post(order, None, OrderType.FAK)
-        signed = self.client.create_order(order)
-        return self.client.post_order(signed, OrderType.FAK)
+                if callable(create_and_post):
+                    try:
+                        return create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
+                    except TypeError:
+                        return create_and_post(order, None, OrderType.FAK)
+                signed = self.client.create_order(order)
+                return self.client.post_order(signed, OrderType.FAK)
+            except Exception as exc:
+                last_exc = exc
+                if _is_order_version_mismatch_error(exc) and not refreshed_creds:
+                    try:
+                        self._refresh_api_creds()
+                        refreshed_creds = True
+                    except Exception as cred_exc:
+                        LOGGER.warning("API cred refresh failed after buy mismatch: %s", cred_exc)
+                self._sleep_before_buy_retry(
+                    attempt=attempt,
+                    token=token,
+                    amount_hint=float(sz),
+                    reason=exc,
+                    context="marketable_buy",
+                )
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("marketable buy failed without exception")
 
     def place_marketable_buy_with_result(
         self,
@@ -399,24 +446,49 @@ class PolymarketTrader:
         from clob_fak import fak_buy_with_confirm
 
         sz = _clob_taker_size_shares(size)
-        order_kwargs: dict[str, Any] = {
-            "token_id": token.token_id,
-            "price": round(price, 2),
-            "size": sz,
-            "side": self._buy_side,
-        }
-        if fee_rate_bps is not None and not _CLOB_V2:
-            order_kwargs["fee_rate_bps"] = fee_rate_bps
-        order = OrderArgs(**order_kwargs)
-        create_and_post = getattr(self.client, "create_and_post_order", None)
-        if callable(create_and_post):
+        last_exc: Exception | None = None
+        refreshed_creds = False
+        raw: dict[str, Any] | None = None
+        for attempt in range(1, _BUY_RETRY_ATTEMPTS + 1):
+            order_kwargs: dict[str, Any] = {
+                "token_id": token.token_id,
+                "price": round(price, 2),
+                "size": sz,
+                "side": self._buy_side,
+            }
+            if fee_rate_bps is not None and not _CLOB_V2:
+                order_kwargs["fee_rate_bps"] = fee_rate_bps
+            order = OrderArgs(**order_kwargs)
+            create_and_post = getattr(self.client, "create_and_post_order", None)
             try:
-                raw = create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
-            except TypeError:
-                raw = create_and_post(order, None, OrderType.FAK)
-        else:
-            signed = self.client.create_order(order)
-            raw = self.client.post_order(signed, OrderType.FAK)
+                if callable(create_and_post):
+                    try:
+                        raw = create_and_post(order_args=order, options=None, order_type=OrderType.FAK)
+                    except TypeError:
+                        raw = create_and_post(order, None, OrderType.FAK)
+                else:
+                    signed = self.client.create_order(order)
+                    raw = self.client.post_order(signed, OrderType.FAK)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if _is_order_version_mismatch_error(exc) and not refreshed_creds:
+                    try:
+                        self._refresh_api_creds()
+                        refreshed_creds = True
+                    except Exception as cred_exc:
+                        LOGGER.warning("API cred refresh failed after buy mismatch: %s", cred_exc)
+                self._sleep_before_buy_retry(
+                    attempt=attempt,
+                    token=token,
+                    amount_hint=float(sz),
+                    reason=exc,
+                    context="marketable_buy_with_result",
+                )
+        if raw is None:
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError("marketable buy with result failed without response")
         return fak_buy_with_confirm(
             self.client.get_order,
             raw,
@@ -446,7 +518,7 @@ class PolymarketTrader:
         u = float(usdc)
         if u <= 0:
             raise ValueError("usdc must be > 0")
-        max_attempts = 3
+        max_attempts = _BUY_RETRY_ATTEMPTS
         last_exc: Exception | None = None
         refreshed_creds = False
         for attempt in range(1, max_attempts + 1):
@@ -464,19 +536,19 @@ class PolymarketTrader:
                 return self._create_and_post_market_order(margs, options=opts)
             except Exception as exc:
                 last_exc = exc
-                if attempt < max_attempts and _is_order_version_mismatch_error(exc):
-                    if not refreshed_creds:
-                        try:
-                            self._refresh_api_creds()
-                            refreshed_creds = True
-                        except Exception as cred_exc:
-                            LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
-                    LOGGER.warning(
-                        "CLOB order_version_mismatch on market buy usdc; retrying %d/%d token=%s usdc=%.2f",
-                        attempt + 1,
-                        max_attempts,
-                        token.token_id[:20] + "…",
-                        u,
+                if _is_order_version_mismatch_error(exc) and not refreshed_creds:
+                    try:
+                        self._refresh_api_creds()
+                        refreshed_creds = True
+                    except Exception as cred_exc:
+                        LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
+                if attempt < max_attempts:
+                    self._sleep_before_buy_retry(
+                        attempt=attempt,
+                        token=token,
+                        amount_hint=u,
+                        reason=exc,
+                        context="market_buy_usdc",
                     )
                     continue
                 raise
@@ -514,7 +586,7 @@ class PolymarketTrader:
         u = float(usdc)
         if u <= 0:
             raise ValueError("usdc must be > 0")
-        max_attempts = 3
+        max_attempts = _BUY_RETRY_ATTEMPTS
         last_exc: Exception | None = None
         refreshed_creds = False
         raw: dict[str, Any] | None = None
@@ -536,19 +608,19 @@ class PolymarketTrader:
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt < max_attempts and _is_order_version_mismatch_error(exc):
-                    if not refreshed_creds:
-                        try:
-                            self._refresh_api_creds()
-                            refreshed_creds = True
-                        except Exception as cred_exc:
-                            LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
-                    LOGGER.warning(
-                        "CLOB order_version_mismatch on market buy usdc+confirm; retrying %d/%d token=%s usdc=%.2f",
-                        attempt + 1,
-                        max_attempts,
-                        token.token_id[:20] + "…",
-                        u,
+                if _is_order_version_mismatch_error(exc) and not refreshed_creds:
+                    try:
+                        self._refresh_api_creds()
+                        refreshed_creds = True
+                    except Exception as cred_exc:
+                        LOGGER.warning("API cred refresh failed after order_version_mismatch: %s", cred_exc)
+                if attempt < max_attempts:
+                    self._sleep_before_buy_retry(
+                        attempt=attempt,
+                        token=token,
+                        amount_hint=u,
+                        reason=exc,
+                        context="market_buy_usdc_with_result",
                     )
                     continue
                 raise
