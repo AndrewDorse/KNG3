@@ -250,17 +250,27 @@ def match_rule(
 
     if family in {
         "M_combo2", "N_combo3", "M15_combo2", "N15_combo3",
-        "Z5_combo2", "Z5_combo3", "Z5_combo4", "Z5_combo5",
-        "Z15_combo2", "Z15_combo3", "Z15_combo4", "Z15_combo5",
+        "Z5_combo2", "Z5_combo3", "Z5_combo4", "Z5_combo5", "Z5_combo6",
+        "V5_combo2", "V5_combo3", "V5_combo4", "V5_combo5", "V5_combo6",
+        "Z15_combo2", "Z15_combo3", "Z15_combo4", "Z15_combo5", "Z15_combo6",
+        "V15_combo2", "V15_combo3", "V15_combo4", "V15_combo5", "V15_combo6",
     }:
         parts = [p for p in pattern_key.split("&") if p]
-        if family in {"M_combo2", "M15_combo2", "Z5_combo2", "Z15_combo2"} and len(parts) != 2:
+        if family in {
+            "M_combo2", "M15_combo2",
+            "Z5_combo2", "Z15_combo2", "V5_combo2", "V15_combo2",
+        } and len(parts) != 2:
             return False
-        if family in {"N_combo3", "N15_combo3", "Z5_combo3", "Z15_combo3"} and len(parts) != 3:
+        if family in {
+            "N_combo3", "N15_combo3",
+            "Z5_combo3", "Z15_combo3", "V5_combo3", "V15_combo3",
+        } and len(parts) != 3:
             return False
-        if family in {"Z5_combo4", "Z15_combo4"} and len(parts) != 4:
+        if family in {"Z5_combo4", "Z15_combo4", "V5_combo4", "V15_combo4"} and len(parts) != 4:
             return False
-        if family in {"Z5_combo5", "Z15_combo5"} and len(parts) != 5:
+        if family in {"Z5_combo5", "Z15_combo5", "V5_combo5", "V15_combo5"} and len(parts) != 5:
+            return False
+        if family in {"Z5_combo6", "Z15_combo6", "V5_combo6", "V15_combo6"} and len(parts) != 6:
             return False
         for p in parts:
             if "=" not in p:
