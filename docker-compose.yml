@@ -1,4 +1,4 @@
-# SHAMAN v1 image. Copy .env.example -> .env (BOT_STRATEGY_MODE=shaman_v1).
+# KNG3 image: SHAMAN v1 or PRST1 UP. Copy .env.example -> .env (set BOT_STRATEGY_MODE).
 services:
   bot:
     build: .
