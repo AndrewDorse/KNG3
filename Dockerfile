@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
 # Bump when syncing from kng_bot3 (labels only; COPY list below is the real contract).
-# SHAMAN v1 or PRST1 UP: Binance -> Polymarket FAK.
-ARG KNG3_IMAGE_TAG=2026-05-02-prst1-up
-LABEL org.opencontainers.image.title="KNG3 SHAMAN / PRST1" \
-      org.opencontainers.image.description="Docker: SHAMAN v1 or PRST1 UP (Binance fair vs PM UP, $1 scalp)" \
+# SHAMAN v1 only: Binance 5m/15m signals -> optional Polymarket FAK.
+ARG KNG3_IMAGE_TAG=2026-04-27-shaman-1usd-per-signal
+LABEL org.opencontainers.image.title="KNG3 SHAMAN v1" \
+      org.opencontainers.image.description="Docker: SHAMAN v1 (Binance 5m/15m -> Polymarket UP/DOWN)" \
       org.opencontainers.image.version="${KNG3_IMAGE_TAG}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -29,7 +29,6 @@ COPY http_session.py /app/http_session.py
 COPY clob_fak.py /app/clob_fak.py
 COPY polymarket_ws.py /app/polymarket_ws.py
 COPY shaman_v1_engine.py /app/shaman_v1_engine.py
-COPY prst1_up_engine.py /app/prst1_up_engine.py
 
 RUN mkdir -p /app/PALADIN
 COPY PALADIN/shaman_v1_eval.py /app/PALADIN/shaman_v1_eval.py
